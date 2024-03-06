@@ -1210,11 +1210,15 @@ static __le32 rtw89_build_txwd_info2_v1(struct rtw89_tx_desc_info *desc_info)
 	return cpu_to_le32(dword);
 }
 
-static __le32 rtw89_build_txwd_info4(struct rtw89_tx_desc_info *desc_info)
+static __le32 rtw89_build_txwd_info4(struct rtw89_dev *rtwdev, struct rtw89_tx_desc_info *desc_info)
 {
 	bool rts_en = !desc_info->is_bmc && !desc_info->rts_dis;
 	u32 dword = FIELD_PREP(RTW89_TXWD_INFO4_RTS_EN, rts_en) |
 		    FIELD_PREP(RTW89_TXWD_INFO4_HW_RTS_EN, 1);
+
+	if (rtwdev->hal.edcca_test)
+		dword = FIELD_PREP(RTW89_TXWD_INFO4_RTS_EN, 0) |
+			FIELD_PREP(RTW89_TXWD_INFO4_HW_RTS_EN, 0);
 
 	return cpu_to_le32(dword);
 }
@@ -1237,7 +1241,7 @@ void rtw89_core_fill_txdesc(struct rtw89_dev *rtwdev,
 	txwd_info->dword0 = rtw89_build_txwd_info0(desc_info);
 	txwd_info->dword1 = rtw89_build_txwd_info1(desc_info);
 	txwd_info->dword2 = rtw89_build_txwd_info2(desc_info);
-	txwd_info->dword4 = rtw89_build_txwd_info4(desc_info);
+	txwd_info->dword4 = rtw89_build_txwd_info4(rtwdev, desc_info);
 
 }
 EXPORT_SYMBOL(rtw89_core_fill_txdesc);
@@ -1266,7 +1270,7 @@ void rtw89_core_fill_txdesc_v1(struct rtw89_dev *rtwdev,
 	txwd_info->dword0 = rtw89_build_txwd_info0_v1(desc_info);
 	txwd_info->dword1 = rtw89_build_txwd_info1(desc_info);
 	txwd_info->dword2 = rtw89_build_txwd_info2_v1(desc_info);
-	txwd_info->dword4 = rtw89_build_txwd_info4(desc_info);
+	txwd_info->dword4 = rtw89_build_txwd_info4(rtwdev, desc_info);
 }
 EXPORT_SYMBOL(rtw89_core_fill_txdesc_v1);
 

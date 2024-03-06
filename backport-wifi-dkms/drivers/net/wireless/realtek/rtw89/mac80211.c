@@ -868,6 +868,9 @@ static int rtw89_ops_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (!RTW89_CHK_FW_FEATURE(SCAN_OFFLOAD, &rtwdev->fw))
 		return 1;
 
+	if (rtwdev->hal.edcca_test)
+		return -EBUSY;
+
 	if (rtwdev->scanning || rtwvif->offchan)
 		return -EBUSY;
 
@@ -892,6 +895,9 @@ static void rtw89_ops_cancel_hw_scan(struct ieee80211_hw *hw,
 		return;
 
 	if (!rtwdev->scanning)
+		return;
+
+	if (rtwdev->hal.edcca_test)
 		return;
 
 	mutex_lock(&rtwdev->mutex);

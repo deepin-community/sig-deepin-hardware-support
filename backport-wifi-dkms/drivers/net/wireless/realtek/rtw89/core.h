@@ -4420,6 +4420,8 @@ struct rtw89_edcca_regs {
 	u32 edcca_level;
 	u32 edcca_mask;
 	u32 edcca_p_mask;
+	u32 edcca_dwn_level;
+	u32 edcca_dwn_mask;
 	u32 ppdu_level;
 	u32 ppdu_mask;
 	u32 rpt_a;
@@ -4430,6 +4432,13 @@ struct rtw89_edcca_regs {
 	u32 rpt_sel_be_mask;
 	u32 tx_collision_t2r_st;
 	u32 tx_collision_t2r_st_mask;
+};
+
+struct rtw89_edcca_thresholds {
+	u8 edcca_th_2g;
+	u8 edcca_th_5g;
+	u8 edcca_cbp_th_6g;
+	u8 edcca_cs_th;
 };
 
 struct rtw89_phy_ul_tb_info {
@@ -4591,6 +4600,7 @@ struct rtw89_chip_info {
 	struct rtw89_reg_def rfkill_get;
 	u32 dma_ch_mask;
 	const struct rtw89_edcca_regs *edcca_regs;
+	const struct rtw89_edcca_thresholds *edcca_th;
 	const struct wiphy_wowlan_support *wowlan_stub;
 	const struct rtw89_xtal_info *xtal_info;
 };
@@ -4915,6 +4925,8 @@ struct rtw89_hal {
 
 	enum rtw89_edcca_mode edcca_mode;
 	struct rtw89_edcca_bak edcca_bak;
+	bool edcca_test;
+	int edcca_offset;
 	u32 disabled_dm_bitmap; /* bitmap of enum rtw89_dm_type */
 };
 
@@ -6424,6 +6436,9 @@ static inline void rtw89_chip_rfk_init(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
 
+	if (rtwdev->hal.edcca_test)
+		return;
+
 	if (chip->ops->rfk_init)
 		chip->ops->rfk_init(rtwdev);
 }
@@ -6431,6 +6446,9 @@ static inline void rtw89_chip_rfk_init(struct rtw89_dev *rtwdev)
 static inline void rtw89_chip_rfk_channel(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
+
+	if (rtwdev->hal.edcca_test)
+		return;
 
 	if (chip->ops->rfk_channel)
 		chip->ops->rfk_channel(rtwdev);

@@ -171,10 +171,19 @@ static const struct rtw89_dig_regs rtw8852c_dig_regs = {
 			      B_PATH1_S20_FOLLOW_BY_PAGCUGC_EN_MSK},
 };
 
+static const struct rtw89_edcca_thresholds rtw8852c_edcca_th = {
+	.edcca_th_2g = EDCCA_2G - 3,
+	.edcca_th_5g = EDCCA_5G - 3,
+	.edcca_cbp_th_6g = CBP_6G,
+	.edcca_cs_th = CARRIER_SENSE - 10,
+};
+
 static const struct rtw89_edcca_regs rtw8852c_edcca_regs = {
 	.edcca_level			= R_SEG0R_EDCCA_LVL,
 	.edcca_mask			= B_EDCCA_LVL_MSK0,
 	.edcca_p_mask			= B_EDCCA_LVL_MSK1,
+	.edcca_dwn_level		= R_SEG0R_EDCCA_DWN_V2,
+	.edcca_dwn_mask			= B_SEG0R_EDCCA_DWN_LVL_V2,
 	.ppdu_level			= R_SEG0R_EDCCA_LVL,
 	.ppdu_mask			= B_EDCCA_LVL_MSK3,
 	.rpt_a				= R_EDCCA_RPT_A,
@@ -3032,6 +3041,7 @@ const struct rtw89_chip_info rtw8852c_chip_info = {
 	.rfkill_get		= {R_AX_GPIO_EXT_CTRL, B_AX_GPIO_IN_9},
 	.dma_ch_mask		= 0,
 	.edcca_regs		= &rtw8852c_edcca_regs,
+	.edcca_th		= &rtw8852c_edcca_th,
 #ifdef CONFIG_PM
 	.wowlan_stub		= &rtw_wowlan_stub_8852c,
 #endif

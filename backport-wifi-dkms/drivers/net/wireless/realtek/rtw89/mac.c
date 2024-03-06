@@ -4812,7 +4812,7 @@ rtw89_mac_bcn_fltr_rpt(struct rtw89_dev *rtwdev, struct rtw89_vif *rtwvif,
 
 	switch (type) {
 	case RTW89_BCN_FLTR_BEACON_LOSS:
-		if (!rtwdev->scanning && !rtwvif->offchan)
+		if (!rtwdev->scanning && !rtwvif->offchan && !rtwdev->hal.edcca_test)
 			ieee80211_beacon_loss(vif);
 		rtw89_fw_h2c_set_bcn_fltr_cfg(rtwdev, vif, true);
 		return;

@@ -1,6 +1,7 @@
 
 ifneq ($(KERNELRELEASE),)
 	obj-m +=  btrtl.o
+	obj-m +=  btusb.o
 else
 	PWD := $(shell pwd)
 	KVER := $(shell uname -r)

@@ -78,6 +78,10 @@ static const struct pci_device_id rtw89_8852be_id_table[] = {
 		PCI_DEVICE_SUB(0x10EC, 0xB852, 0x1A3B, 0x5470),
 		.driver_data = (kernel_ulong_t)&rtw89_8852be_info,
 	},
+	{
+		PCI_DEVICE_SUB(0x10EC, 0xB852, 0x17AA, 0x4853),
+		.driver_data = (kernel_ulong_t)&rtw89_8852be_info,
+	},
 	{},
 };
 MODULE_DEVICE_TABLE(pci, rtw89_8852be_id_table);

@@ -1098,7 +1098,7 @@ static void rtw89_ops_set_wakeup(struct ieee80211_hw *hw, bool enabled)
 }
 #endif
 
-void rtw89_ops_rfkill_poll(struct ieee80211_hw *hw)
+static void rtw89_ops_rfkill_poll(struct ieee80211_hw *hw)
 {
 	struct rtw89_dev *rtwdev = hw->priv;
 

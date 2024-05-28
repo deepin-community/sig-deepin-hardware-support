@@ -1,3 +1,3 @@
-static const char drv_ver[]="v6.8-backport-5.15-43-g606c895b3";
+static char *drv_ver = "v6.8-backport-5.15-15-g65e1278a9";
 #include <linux/module.h>
-module_param_string(drv_ver, drv_ver, sizeof(drv_ver), 0444);
+module_param(drv_ver, charp, 0444);

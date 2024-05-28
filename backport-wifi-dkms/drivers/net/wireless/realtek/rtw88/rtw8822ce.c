@@ -5,15 +5,15 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include "pci.h"
-#include "rtw8822ce.h"
+#include "rtw8822c.h"
 
 static const struct pci_device_id rtw_8822ce_id_table[] = {
 	{
-		PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0xC822),
+		PCI_DEVICE_SUB(0x10EC, 0xC822, 0x10EC, 0xC822),
 		.driver_data = (kernel_ulong_t)&rtw8822c_hw_spec
 	},
 	{
-		PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0xC82F),
+		PCI_DEVICE_SUB(0x10EC, 0xC822, 0x1A3B, 0x3751),
 		.driver_data = (kernel_ulong_t)&rtw8822c_hw_spec
 	},
 	{}

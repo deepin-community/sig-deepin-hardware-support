@@ -18,9 +18,12 @@
 #define BAC_OOBS_SEL			BIT(4)
 #define RAC_ANA0A			0x0A
 #define B_BAC_EQ_SEL			BIT(5)
+#define RAC_ANA0B			0x0B
+#define MANUAL_LVL_MASK			GENMASK(8, 5)
 #define RAC_ANA0C			0x0C
 #define B_PCIE_BIT_PSAVE		BIT(15)
 #define RAC_ANA0D			0x0D
+#define OFFSET_CAL_MODE			BIT(13)
 #define BAC_RX_TEST_EN			BIT(6)
 #define RAC_ANA10			0x10
 #define ADDR_SEL_PINOUT_DIS_VAL		0x3C4
@@ -38,6 +41,7 @@
 #define RAC_ANA1E_G2_VAL		0x6EEA
 #define RAC_ANA1F			0x1F
 #define OOBS_LEVEL_MASK			GENMASK(12, 8)
+#define OFFSET_CAL_MASK			GENMASK(7, 4)
 #define RAC_ANA24			0x24
 #define B_AX_DEGLITCH			GENMASK(11, 8)
 #define RAC_ANA26			0x26

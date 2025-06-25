@@ -22,7 +22,13 @@ config RTW89_8851B
 config RTW89_8852A
 	tristate
 
+config RTW89_8852B_COMMON
+	tristate
+
 config RTW89_8852B
+	tristate
+
+config RTW89_8852BT
 	tristate
 
 config RTW89_8852C
@@ -57,8 +63,21 @@ config RTW89_8852BE
 	select RTW89_CORE
 	select RTW89_PCI
 	select RTW89_8852B
+	select RTW89_8852B_COMMON
 	help
 	  Select this option will enable support for 8852BE chipset
+
+	  802.11ax PCIe wireless network (Wi-Fi 6) adapter
+
+config RTW89_8852BTE
+	tristate "Realtek 8852BE-VT PCI wireless network (Wi-Fi 6) adapter"
+	depends on PCI
+	select RTW89_CORE
+	select RTW89_PCI
+	select RTW89_8852BT
+	select RTW89_8852B_COMMON
+	help
+	  Select this option will enable support for 8852BE-VT chipset
 
 	  802.11ax PCIe wireless network (Wi-Fi 6) adapter
 

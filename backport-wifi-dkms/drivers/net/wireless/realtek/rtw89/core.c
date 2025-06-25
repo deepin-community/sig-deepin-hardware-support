@@ -18,6 +18,7 @@
 #include "ser.h"
 #include "txrx.h"
 #include "util.h"
+#include "wow.h"
 
 static bool rtw89_disable_ps_mode;
 module_param_named(disable_ps_mode, rtw89_disable_ps_mode, bool, 0644);
@@ -26,6 +27,10 @@ MODULE_PARM_DESC(disable_ps_mode, "Set Y to disable low power mode");
 static bool rtw89_disable_pwr_lmt;
 module_param_named(disable_pwr_lmt, rtw89_disable_pwr_lmt, bool, 0644);
 MODULE_PARM_DESC(disable_pwr_lmt, "Set Y to disable power limit");
+
+static bool rtw89_disable_rts_11b;
+module_param_named(disable_rts_11b, rtw89_disable_rts_11b, bool, 0644);
+MODULE_PARM_DESC(disable_rts_11b, "Set Y to disable rts/cts setting");
 
 #define RTW89_DEF_CHAN(_freq, _hw_val, _flags, _band)	\
 	{ .center_freq = _freq, .hw_value = _hw_val, .flags = _flags, .band = _band, }
@@ -258,6 +263,9 @@ static void rtw89_traffic_stats_accu(struct rtw89_dev *rtwdev,
 				     struct sk_buff *skb, bool tx)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+
+	if (tx && ieee80211_is_assoc_req(hdr->frame_control))
+		rtw89_wow_parse_akm(rtwdev, skb);
 
 	if (!ieee80211_is_data(hdr->frame_control))
 		return;
@@ -505,31 +513,21 @@ static void
 rtw89_core_tx_update_sec_key(struct rtw89_dev *rtwdev,
 			     struct rtw89_core_tx_request *tx_req)
 {
+	struct rtw89_cam_info *cam_info = &rtwdev->cam_info;
 	const struct rtw89_chip_info *chip = rtwdev->chip;
-	struct ieee80211_vif *vif = tx_req->vif;
-	struct ieee80211_sta *sta = tx_req->sta;
+	const struct rtw89_sec_cam_entry *sec_cam;
 	struct ieee80211_tx_info *info;
 	struct ieee80211_key_conf *key;
-	struct rtw89_vif *rtwvif;
-	struct rtw89_sta *rtwsta = sta_to_rtwsta_safe(sta);
-	struct rtw89_addr_cam_entry *addr_cam;
-	struct rtw89_sec_cam_entry *sec_cam;
 	struct rtw89_tx_desc_info *desc_info = &tx_req->desc_info;
 	struct sk_buff *skb = tx_req->skb;
 	u8 sec_type = RTW89_SEC_KEY_TYPE_NONE;
+	u8 sec_cam_idx;
 	u64 pn64;
-
-	if (!vif) {
-		rtw89_warn(rtwdev, "cannot set sec key without vif\n");
-		return;
-	}
-
-	rtwvif = (struct rtw89_vif *)vif->drv_priv;
-	addr_cam = rtw89_get_addr_cam_of(rtwvif, rtwsta);
 
 	info = IEEE80211_SKB_CB(skb);
 	key = info->control.hw_key;
-	sec_cam = addr_cam->sec_entries[key->hw_key_idx];
+	sec_cam_idx = key->hw_key_idx;
+	sec_cam = cam_info->sec_entries[sec_cam_idx];
 	if (!sec_cam) {
 		rtw89_warn(rtwdev, "sec cam entry is empty\n");
 		return;
@@ -835,6 +833,13 @@ rtw89_core_tx_update_data_info(struct rtw89_dev *rtwdev,
 	desc_info->er_cap = rtwsta ? rtwsta->er_cap : false;
 	desc_info->stbc = rtwsta ? rtwsta->ra.stbc_cap : false;
 	desc_info->ldpc = rtwsta ? rtwsta->ra.ldpc_cap : false;
+
+	if (rtw89_disable_rts_11b) {
+		struct rate_info *rate = &rtwsta->ra_report.txrate;
+
+		if (!rate->flags && rate->legacy <= 110)
+			desc_info->rts_dis = true;
+	}
 
 	/* enable wd_info for AMPDU */
 	desc_info->en_wd_info = true;
@@ -1200,7 +1205,7 @@ static __le32 rtw89_build_txwd_info2_v1(struct rtw89_tx_desc_info *desc_info)
 
 static __le32 rtw89_build_txwd_info4(struct rtw89_tx_desc_info *desc_info)
 {
-	bool rts_en = !desc_info->is_bmc;
+	bool rts_en = !desc_info->is_bmc && !desc_info->rts_dis;
 	u32 dword = FIELD_PREP(RTW89_TXWD_INFO4_RTS_EN, rts_en) |
 		    FIELD_PREP(RTW89_TXWD_INFO4_HW_RTS_EN, 1);
 
@@ -1469,16 +1474,20 @@ static int rtw89_core_rx_process_mac_ppdu(struct rtw89_dev *rtwdev,
 		return -EINVAL;
 	}
 
-	/* For WiFi 7 chips, RXWD.mac_id of PPDU status is not set by hardware,
-	 * so update mac_id by rxinfo_user[].mac_id.
-	 */
-	for (i = 0; i < usr_num && chip_gen == RTW89_CHIP_BE; i++) {
+	for (i = 0; i < usr_num; i++) {
 		user = &rxinfo->user[i];
 		if (!le32_get_bits(user->w0, RTW89_RXINFO_USER_MAC_ID_VALID))
 			continue;
-
-		phy_ppdu->mac_id =
-			le32_get_bits(user->w0, RTW89_RXINFO_USER_MACID);
+		/* For WiFi 7 chips, RXWD.mac_id of PPDU status is not set
+		 * by hardware, so update mac_id by rxinfo_user[].mac_id.
+		 */
+		if (chip_gen == RTW89_CHIP_BE)
+			phy_ppdu->mac_id =
+				le32_get_bits(user->w0, RTW89_RXINFO_USER_MACID);
+		phy_ppdu->has_data =
+			le32_get_bits(user->w0, RTW89_RXINFO_USER_DATA);
+		phy_ppdu->has_bcn =
+			le32_get_bits(user->w0, RTW89_RXINFO_USER_BCN);
 		break;
 	}
 
@@ -1498,6 +1507,26 @@ static int rtw89_core_rx_process_mac_ppdu(struct rtw89_dev *rtwdev,
 	phy_ppdu->len = skb->data + skb->len - phy_sts;
 
 	return 0;
+}
+
+static u8 rtw89_get_data_rate_nss(struct rtw89_dev *rtwdev, u16 data_rate)
+{
+	u8 data_rate_mode;
+
+	data_rate_mode = rtw89_get_data_rate_mode(rtwdev, data_rate);
+	switch (data_rate_mode) {
+	case DATA_RATE_MODE_NON_HT:
+		return 1;
+	case DATA_RATE_MODE_HT:
+		return rtw89_get_data_ht_nss(rtwdev, data_rate) + 1;
+	case DATA_RATE_MODE_VHT:
+	case DATA_RATE_MODE_HE:
+	case DATA_RATE_MODE_EHT:
+		return rtw89_get_data_nss(rtwdev, data_rate) + 1;
+	default:
+		rtw89_warn(rtwdev, "invalid RX rate mode %d\n", data_rate_mode);
+		return 0;
+	}
 }
 
 static void rtw89_core_rx_process_phy_ppdu_iter(void *data,
@@ -1529,10 +1558,14 @@ static void rtw89_core_rx_process_phy_ppdu_iter(void *data,
 			ewma_rssi_add(&rtwsta->rssi[i], phy_ppdu->rssi[i]);
 	}
 
-	if (phy_ppdu->ofdm.has) {
+	if (phy_ppdu->ofdm.has && (phy_ppdu->has_data || phy_ppdu->has_bcn)) {
 		ewma_snr_add(&rtwsta->avg_snr, phy_ppdu->ofdm.avg_snr);
-		ewma_evm_add(&rtwsta->evm_min[evm_pos], phy_ppdu->ofdm.evm_min);
-		ewma_evm_add(&rtwsta->evm_max[evm_pos], phy_ppdu->ofdm.evm_max);
+		if (rtw89_get_data_rate_nss(rtwdev, phy_ppdu->rate) == 1) {
+			ewma_evm_add(&rtwsta->evm_1ss, phy_ppdu->ofdm.evm_min);
+		} else {
+			ewma_evm_add(&rtwsta->evm_min[evm_pos], phy_ppdu->ofdm.evm_min);
+			ewma_evm_add(&rtwsta->evm_max[evm_pos], phy_ppdu->ofdm.evm_max);
+		}
 	}
 }
 
@@ -1941,7 +1974,8 @@ static void rtw89_vif_rx_stats_iter(void *data, u8 *mac,
 		return;
 
 	if (ieee80211_is_beacon(hdr->frame_control)) {
-		if (vif->type == NL80211_IFTYPE_STATION) {
+		if (vif->type == NL80211_IFTYPE_STATION &&
+		    !test_bit(RTW89_FLAG_WOWLAN, rtwdev->flags)) {
 			rtw89_vif_sync_bcn_tsf(rtwvif, hdr, skb->len);
 			rtw89_fw_h2c_rssi_offload(rtwdev, phy_ppdu);
 		}
@@ -3311,6 +3345,7 @@ int rtw89_core_sta_add(struct rtw89_dev *rtwdev,
 
 	ewma_rssi_init(&rtwsta->avg_rssi);
 	ewma_snr_init(&rtwsta->avg_snr);
+	ewma_evm_init(&rtwsta->evm_1ss);
 	for (i = 0; i < ant_num; i++) {
 		ewma_rssi_init(&rtwsta->rssi[i]);
 		ewma_evm_init(&rtwsta->evm_min[i]);
@@ -4147,6 +4182,7 @@ int rtw89_core_init(struct rtw89_dev *rtwdev)
 
 	rtw89_init_wait(&rtwdev->mcc.wait);
 	rtw89_init_wait(&rtwdev->mac.fw_ofld_wait);
+	rtw89_init_wait(&rtwdev->wow.wait);
 
 	INIT_WORK(&rtwdev->c2h_work, rtw89_fw_c2h_work);
 	INIT_WORK(&rtwdev->ips_work, rtw89_ips_work);
@@ -4249,7 +4285,7 @@ static void rtw89_read_chip_ver(struct rtw89_dev *rtwdev)
 
 	rtwdev->hal.cv = cv;
 
-	if (chip->chip_id == RTL8852B || chip->chip_id == RTL8851B) {
+	if (rtw89_is_rtl885xb(rtwdev)) {
 		ret = rtw89_mac_read_xtal_si(rtwdev, XTAL_SI_CV, &val);
 		if (ret)
 			return;
@@ -4498,7 +4534,10 @@ static int rtw89_core_register_hw(struct rtw89_dev *rtwdev)
 
 	hw->wiphy->flags |= WIPHY_FLAG_SUPPORTS_TDLS |
 			    WIPHY_FLAG_TDLS_EXTERNAL_SETUP |
-			    WIPHY_FLAG_AP_UAPSD | WIPHY_FLAG_SPLIT_SCAN_6GHZ;
+			    WIPHY_FLAG_AP_UAPSD |
+			    WIPHY_FLAG_SUPPORTS_EXT_KEK_KCK |
+			    WIPHY_FLAG_SPLIT_SCAN_6GHZ;
+
 	hw->wiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
 
 	hw->wiphy->max_scan_ssids = RTW89_SCANOFLD_MAX_SSID;

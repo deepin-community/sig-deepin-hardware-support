@@ -1723,6 +1723,82 @@ static int trx_init_be(struct rtw89_dev *rtwdev)
 	return 0;
 }
 
+int rtw89_mac_cfg_gnt_v2(struct rtw89_dev *rtwdev,
+			 const struct rtw89_mac_ax_coex_gnt *gnt_cfg)
+{
+	u32 val = 0;
+
+	if (gnt_cfg->band[0].gnt_bt)
+		val |= B_BE_GNT_BT_BB0_VAL | B_BE_GNT_BT_RX_BB0_VAL |
+		       B_BE_GNT_BT_TX_BB0_VAL;
+
+	if (gnt_cfg->band[0].gnt_bt_sw_en)
+		val |= B_BE_GNT_BT_BB0_SWCTRL | B_BE_GNT_BT_RX_BB0_SWCTRL |
+		       B_BE_GNT_BT_TX_BB0_SWCTRL;
+
+	if (gnt_cfg->band[0].gnt_wl)
+		val |= B_BE_GNT_WL_BB0_VAL | B_BE_GNT_WL_RX_VAL |
+		       B_BE_GNT_WL_TX_VAL | B_BE_GNT_WL_BB_PWR_VAL;
+
+	if (gnt_cfg->band[0].gnt_wl_sw_en)
+		val |= B_BE_GNT_WL_BB0_SWCTRL | B_BE_GNT_WL_RX_SWCTRL |
+		       B_BE_GNT_WL_TX_SWCTRL | B_BE_GNT_WL_BB_PWR_SWCTRL;
+
+	if (gnt_cfg->band[1].gnt_bt)
+		val |= B_BE_GNT_BT_BB1_VAL | B_BE_GNT_BT_RX_BB1_VAL |
+		       B_BE_GNT_BT_TX_BB1_VAL;
+
+	if (gnt_cfg->band[1].gnt_bt_sw_en)
+		val |= B_BE_GNT_BT_BB1_SWCTRL | B_BE_GNT_BT_RX_BB1_SWCTRL |
+		       B_BE_GNT_BT_TX_BB1_SWCTRL;
+
+	if (gnt_cfg->band[1].gnt_wl)
+		val |= B_BE_GNT_WL_BB1_VAL | B_BE_GNT_WL_RX_VAL |
+		       B_BE_GNT_WL_TX_VAL | B_BE_GNT_WL_BB_PWR_VAL;
+
+	if (gnt_cfg->band[1].gnt_wl_sw_en)
+		val |= B_BE_GNT_WL_BB1_SWCTRL | B_BE_GNT_WL_RX_SWCTRL |
+		       B_BE_GNT_WL_TX_SWCTRL | B_BE_GNT_WL_BB_PWR_SWCTRL;
+
+	if (gnt_cfg->bt[0].wlan_act_en)
+		val |= B_BE_WL_ACT_SWCTRL;
+	if (gnt_cfg->bt[0].wlan_act)
+		val |= B_BE_WL_ACT_VAL;
+	if (gnt_cfg->bt[1].wlan_act_en)
+		val |= B_BE_WL_ACT2_SWCTRL;
+	if (gnt_cfg->bt[1].wlan_act)
+		val |= B_BE_WL_ACT2_VAL;
+
+	rtw89_write32(rtwdev, R_BE_GNT_SW_CTRL, val);
+
+	return 0;
+}
+EXPORT_SYMBOL(rtw89_mac_cfg_gnt_v2);
+
+int rtw89_mac_cfg_ctrl_path_v2(struct rtw89_dev *rtwdev, bool wl)
+{
+	struct rtw89_btc *btc = &rtwdev->btc;
+	struct rtw89_btc_dm *dm = &btc->dm;
+	struct rtw89_mac_ax_gnt *g = dm->gnt.band;
+	struct rtw89_mac_ax_wl_act *gbt = dm->gnt.bt;
+	int i;
+
+	if (wl)
+		return 0;
+
+	for (i = 0; i < RTW89_PHY_MAX; i++) {
+		g[i].gnt_bt_sw_en = 1;
+		g[i].gnt_bt = 1;
+		g[i].gnt_wl_sw_en = 1;
+		g[i].gnt_wl = 0;
+		gbt[i].wlan_act = 1;
+		gbt[i].wlan_act_en = 0;
+	}
+
+	return rtw89_mac_cfg_gnt_v2(rtwdev, &dm->gnt);
+}
+EXPORT_SYMBOL(rtw89_mac_cfg_ctrl_path_v2);
+
 static int rtw89_set_hw_sch_tx_en_v2(struct rtw89_dev *rtwdev, u8 mac_idx,
 				     u32 tx_en, u32 tx_en_mask)
 {
@@ -2124,6 +2200,32 @@ static void rtw89_mac_dump_qta_lost_be(struct rtw89_dev *rtwdev)
 	dump_err_status_dispatcher_be(rtwdev);
 }
 
+static int rtw89_wow_config_mac_be(struct rtw89_dev *rtwdev, bool enable_wow)
+{
+	if (enable_wow) {
+		rtw89_write32_set(rtwdev, R_BE_RX_STOP, B_BE_HOST_RX_STOP);
+		rtw89_write32_clr(rtwdev, R_BE_RX_FLTR_OPT, B_BE_SNIFFER_MODE);
+		rtw89_mac_cpu_io_rx(rtwdev, enable_wow);
+		rtw89_mac_cfg_ppdu_status(rtwdev, RTW89_MAC_0, false);
+		rtw89_write32(rtwdev, R_BE_FWD_ERR, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_ACTN0, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_ACTN1, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_ACTN2, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_TF0, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_TF1, 0);
+		rtw89_write32(rtwdev, R_BE_FWD_ERR, 0);
+		rtw89_write32(rtwdev, R_BE_HW_PPDU_STATUS, 0);
+		rtw89_write8(rtwdev, R_BE_DBG_WOW_READY, WOWLAN_NOT_READY);
+	} else {
+		rtw89_mac_cpu_io_rx(rtwdev, enable_wow);
+		rtw89_write32_clr(rtwdev, R_BE_RX_STOP, B_BE_HOST_RX_STOP);
+		rtw89_write32_set(rtwdev, R_BE_RX_FLTR_OPT, R_BE_RX_FLTR_OPT);
+		rtw89_mac_cfg_ppdu_status(rtwdev, RTW89_MAC_0, true);
+	}
+
+	return 0;
+}
+
 static void rtw89_mac_dump_cmac_err_status_be(struct rtw89_dev *rtwdev,
 					      u8 band)
 {
@@ -2373,5 +2475,7 @@ const struct rtw89_mac_gen_def rtw89_mac_gen_be = {
 	.dump_err_status = rtw89_mac_dump_err_status_be,
 
 	.is_txq_empty = mac_is_txq_empty_be,
+
+	.wow_config_mac = rtw89_wow_config_mac_be,
 };
 EXPORT_SYMBOL(rtw89_mac_gen_be);

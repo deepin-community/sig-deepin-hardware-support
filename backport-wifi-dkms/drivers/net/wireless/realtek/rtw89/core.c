@@ -2716,12 +2716,10 @@ static void rtw89_core_free_sta_pending_roc_tx(struct rtw89_dev *rtwdev,
 					       struct ieee80211_sta *sta)
 {
 	struct rtw89_sta *rtwsta = (struct rtw89_sta *)sta->drv_priv;
-	struct sk_buff *skb, *tmp;
+	struct sk_buff *skb;
 
-	skb_queue_walk_safe(&rtwsta->roc_queue, skb, tmp) {
-		skb_unlink(skb, &rtwsta->roc_queue);
+	while ((skb = skb_dequeue(&rtwsta->roc_queue)))
 		dev_kfree_skb_any(skb);
-	}
 }
 
 static void rtw89_core_stop_tx_ba_session(struct rtw89_dev *rtwdev,
@@ -2953,7 +2951,7 @@ static void rtw89_core_sta_pending_tx_iter(void *data,
 	struct rtw89_vif *rtwvif_target = data, *rtwvif = rtwsta->rtwvif;
 	struct rtw89_dev *rtwdev = rtwvif->rtwdev;
 	struct ieee80211_vif *vif = rtwvif_to_vif(rtwvif);
-	struct sk_buff *skb, *tmp;
+	struct sk_buff *skb;
 	int qsel, ret;
 
 	if (rtwvif->sub_entity_idx != rtwvif_target->sub_entity_idx)
@@ -2962,9 +2960,7 @@ static void rtw89_core_sta_pending_tx_iter(void *data,
 	if (skb_queue_len(&rtwsta->roc_queue) == 0)
 		return;
 
-	skb_queue_walk_safe(&rtwsta->roc_queue, skb, tmp) {
-		skb_unlink(skb, &rtwsta->roc_queue);
-
+	while ((skb = skb_dequeue(&rtwsta->roc_queue))) {
 		ret = rtw89_core_tx_write(rtwdev, vif, sta, skb, &qsel);
 		if (ret) {
 			rtw89_warn(rtwdev, "pending tx failed with %d\n", ret);

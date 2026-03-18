@@ -2485,8 +2485,9 @@ static int rx_fltr_init_ax(struct rtw89_dev *rtwdev, u8 mac_idx)
 
 static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 {
-	u32 reg, val32;
+	const struct rtw89_chip_info *chip = rtwdev->chip;
 	u32 b_rsp_chk_nav, b_rsp_chk_cca;
+	u32 reg, val32;
 
 	b_rsp_chk_nav = B_AX_RSP_CHK_TXNAV | B_AX_RSP_CHK_INTRA_NAV |
 			B_AX_RSP_CHK_BASIC_NAV;
@@ -2494,9 +2495,8 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 			B_AX_RSP_CHK_SEC_CCA_20 | B_AX_RSP_CHK_BTCCA |
 			B_AX_RSP_CHK_EDCCA | B_AX_RSP_CHK_CCA;
 
-	switch (rtwdev->chip->chip_id) {
-	case RTL8852A:
-	case RTL8852B:
+	if (chip->chip_id == RTL8852A ||
+	    (chip->chip_id == RTL8852B && rtwdev->hal.cv == CHIP_CAV)) {
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_RSP_CHK_SIG, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) & ~b_rsp_chk_nav;
 		rtw89_write32(rtwdev, reg, val32);
@@ -2504,8 +2504,7 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_TRXPTCL_RESP_0, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) & ~b_rsp_chk_cca;
 		rtw89_write32(rtwdev, reg, val32);
-		break;
-	default:
+	} else {
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_RSP_CHK_SIG, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) | b_rsp_chk_nav;
 		rtw89_write32(rtwdev, reg, val32);
@@ -2513,7 +2512,6 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_TRXPTCL_RESP_0, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) | b_rsp_chk_cca;
 		rtw89_write32(rtwdev, reg, val32);
-		break;
 	}
 }
 

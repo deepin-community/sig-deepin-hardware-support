@@ -4880,6 +4880,15 @@ enum rtw89_dm_type {
 	RTW89_DM_DYNAMIC_EDCCA,
 };
 
+enum rtw89_edcca_mode {
+	RTW89_EDCCA_NORMAL,
+	RTW89_EDCCA_ADAPT, /* ETSI */
+	RTW89_EDCCA_CS,    /* JP   */
+	RTW89_EDCCA_CBP,   /* FCC  */
+	RTW89_EDCCA_UK,
+	RTW89_EDCCA_SRRC,
+};
+
 struct rtw89_hal {
 	u32 rx_fltr;
 	u8 cv;
@@ -4904,6 +4913,7 @@ struct rtw89_hal {
 	bool entity_pause;
 	enum rtw89_entity_mode entity_mode;
 
+	enum rtw89_edcca_mode edcca_mode;
 	struct rtw89_edcca_bak edcca_bak;
 	u32 disabled_dm_bitmap; /* bitmap of enum rtw89_dm_type */
 };

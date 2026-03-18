@@ -123,6 +123,7 @@
 #define PHYSTS_RSVD BIT(RTW89_RX_TYPE_RSVD)
 #define PPDU_FILTER_BITMAP (PHYSTS_MGNT | PHYSTS_DATA)
 
+#define EDCCA_HL_DIFF_NORMAL 8
 #define EDCCA_MAX 249
 #define EDCCA_TH_L2H_LB 66
 #define EDCCA_TH_REF 3
@@ -911,6 +912,5 @@ void rtw89_decode_chan_idx(struct rtw89_dev *rtwdev, u8 chan_idx,
 			   u8 *ch, enum nl80211_band *band);
 void rtw89_phy_config_edcca(struct rtw89_dev *rtwdev, bool scan);
 void rtw89_phy_edcca_track(struct rtw89_dev *rtwdev);
-void rtw89_phy_edcca_thre_calc(struct rtw89_dev *rtwdev);
 
 #endif

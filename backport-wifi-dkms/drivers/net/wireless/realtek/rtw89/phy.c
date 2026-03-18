@@ -4943,6 +4943,7 @@ static void rtw89_phy_edcca_init(struct rtw89_dev *rtwdev)
 	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
 	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
 
+	rtwdev->hal.edcca_mode = RTW89_EDCCA_NORMAL;
 	memset(edcca_bak, 0, sizeof(*edcca_bak));
 
 	if (rtwdev->chip->chip_id == RTL8922A && rtwdev->hal.cv == CHIP_CAV) {
@@ -5368,6 +5369,27 @@ static void rtw89_phy_edcca_log(struct rtw89_dev *rtwdev)
 		    pwdb_fb, pwdb_p20, pwdb_s20, pwdb_s40, pwdb_s80);
 }
 
+static void rtw89_phy_set_edcca_threshold(struct rtw89_dev *rtwdev, u8 th, u8 th_diff)
+{
+	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
+	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
+	struct rtw89_hal *hal = &rtwdev->hal;
+
+	if (th == edcca_bak->th_old)
+		return;
+
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
+			       edcca_regs->edcca_mask, th);
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
+			       edcca_regs->edcca_p_mask, th);
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->ppdu_level,
+			       edcca_regs->ppdu_mask, th);
+
+	rtw89_debug(rtwdev, RTW89_DBG_EDCCA,
+		    "[EDCCA]: Mode %d, EDCCA_th = %d EDCCA_hl_diff = %d\n", hal->edcca_mode, th,
+		    th_diff);
+}
+
 static u8 rtw89_phy_edcca_get_thre_by_rssi(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_phy_ch_info *ch_info = &rtwdev->ch_info;
@@ -5386,37 +5408,24 @@ static u8 rtw89_phy_edcca_get_thre_by_rssi(struct rtw89_dev *rtwdev)
 	return edcca_thre;
 }
 
-void rtw89_phy_edcca_thre_calc(struct rtw89_dev *rtwdev)
-{
-	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
-	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
-	u8 th;
-
-	th = rtw89_phy_edcca_get_thre_by_rssi(rtwdev);
-	if (th == edcca_bak->th_old)
-		return;
-
-	edcca_bak->th_old = th;
-
-	rtw89_debug(rtwdev, RTW89_DBG_EDCCA,
-		    "[EDCCA]: Normal Mode, EDCCA_th = %d\n", th);
-
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
-			       edcca_regs->edcca_mask, th);
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
-			       edcca_regs->edcca_p_mask, th);
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->ppdu_level,
-			       edcca_regs->ppdu_mask, th);
-}
-
 void rtw89_phy_edcca_track(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_hal *hal = &rtwdev->hal;
+	u8 th, th_hl_diff;
 
 	if (hal->disabled_dm_bitmap & BIT(RTW89_DM_DYNAMIC_EDCCA))
 		return;
 
-	rtw89_phy_edcca_thre_calc(rtwdev);
+	switch (hal->edcca_mode) {
+	case RTW89_EDCCA_NORMAL:
+		th = rtw89_phy_edcca_get_thre_by_rssi(rtwdev);
+		th_hl_diff = EDCCA_HL_DIFF_NORMAL;
+		break;
+	default:
+		break;
+	}
+
+	rtw89_phy_set_edcca_threshold(rtwdev, th, th_hl_diff);
 	rtw89_phy_edcca_log(rtwdev);
 }
 

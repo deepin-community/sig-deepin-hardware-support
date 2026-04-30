@@ -176,6 +176,8 @@ static const struct rtw89_edcca_regs rtw8852bt_edcca_regs = {
 	.edcca_level			= R_SEG0R_EDCCA_LVL_V1,
 	.edcca_mask			= B_EDCCA_LVL_MSK0,
 	.edcca_p_mask			= B_EDCCA_LVL_MSK1,
+	.edcca_dwn_level		= R_PWOFST,
+	.edcca_dwn_mask			= B_SEG0R_EDCCA_DWN_LVL,
 	.ppdu_level			= R_SEG0R_EDCCA_LVL_V1,
 	.ppdu_mask			= B_EDCCA_LVL_MSK3,
 	.rpt_a				= R_EDCCA_RPT_A,
@@ -184,6 +186,13 @@ static const struct rtw89_edcca_regs rtw8852bt_edcca_regs = {
 	.rpt_sel_mask			= B_EDCCA_RPT_SEL_MSK,
 	.tx_collision_t2r_st		= R_TX_COLLISION_T2R_ST,
 	.tx_collision_t2r_st_mask	= B_TX_COLLISION_T2R_ST_M,
+};
+
+static const struct rtw89_edcca_thresholds rtw8852bt_edcca_th = {
+	.edcca_th_2g = EDCCA_2G,
+	.edcca_th_5g = EDCCA_5G,
+	.edcca_cbp_th_6g = 0,
+	.edcca_cs_th = CARRIER_SENSE - 6,
 };
 
 static const struct rtw89_btc_rf_trx_para rtw89_btc_8852bt_rf_ul[] = {
@@ -825,6 +834,7 @@ const struct rtw89_chip_info rtw8852bt_chip_info = {
 				  BIT(RTW89_DMA_ACH6) | BIT(RTW89_DMA_ACH7) |
 				  BIT(RTW89_DMA_B1MG) | BIT(RTW89_DMA_B1HI),
 	.edcca_regs		= &rtw8852bt_edcca_regs,
+	.edcca_th		= &rtw8852bt_edcca_th,
 #ifdef CONFIG_PM
 	.wowlan_stub		= &rtw_wowlan_stub_8852bt,
 #endif

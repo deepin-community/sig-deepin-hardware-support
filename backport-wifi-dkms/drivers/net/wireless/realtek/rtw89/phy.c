@@ -18,6 +18,9 @@ static u16 get_max_amsdu_len(struct rtw89_dev *rtwdev,
 {
 	u32 bit_rate = report->bit_rate;
 
+	if (rtwdev->hal.edcca_test)
+		return 1;
+
 	/* lower than ofdm, do not aggregate */
 	if (bit_rate < 550)
 		return 1;
@@ -281,8 +284,11 @@ static void rtw89_phy_ra_sta_update(struct rtw89_dev *rtwdev,
 
 		mode |= RTW89_RA_MODE_VHT;
 		csi_mode = RTW89_RA_RPT_MODE_VHT;
-		/* MCS9, MCS8, MCS7 */
-		ra_mask |= get_mcs_ra_mask(mcs_map, 9, 1);
+		/* MCS9 (non-20MHz), MCS8, MCS7 */
+		if (sta->deflink.bandwidth == IEEE80211_STA_RX_BW_20)
+			ra_mask |= get_mcs_ra_mask(mcs_map, 8, 1);
+		else
+			ra_mask |= get_mcs_ra_mask(mcs_map, 9, 1);
 		high_rate_masks = rtw89_ra_mask_vht_rates;
 		if (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_MASK)
 			stbc_en = 1;
@@ -293,8 +299,8 @@ static void rtw89_phy_ra_sta_update(struct rtw89_dev *rtwdev,
 		csi_mode = RTW89_RA_RPT_MODE_HT;
 		ra_mask |= ((u64)sta->deflink.ht_cap.mcs.rx_mask[3] << 48) |
 			   ((u64)sta->deflink.ht_cap.mcs.rx_mask[2] << 36) |
-			   (sta->deflink.ht_cap.mcs.rx_mask[1] << 24) |
-			   (sta->deflink.ht_cap.mcs.rx_mask[0] << 12);
+			   ((u64)sta->deflink.ht_cap.mcs.rx_mask[1] << 24) |
+			   ((u64)sta->deflink.ht_cap.mcs.rx_mask[0] << 12);
 		high_rate_masks = rtw89_ra_mask_ht_rates;
 		if (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_RX_STBC)
 			stbc_en = 1;
@@ -403,7 +409,7 @@ static void rtw89_phy_ra_sta_update(struct rtw89_dev *rtwdev,
 #undef sta
 }
 
-void rtw89_phy_ra_updata_sta(struct rtw89_dev *rtwdev, struct ieee80211_sta *sta,
+void rtw89_phy_ra_update_sta(struct rtw89_dev *rtwdev, struct ieee80211_sta *sta,
 			     u32 changed)
 {
 	struct rtw89_sta *rtwsta = (struct rtw89_sta *)sta->drv_priv;
@@ -551,17 +557,17 @@ out:
 	rtw89_debug(rtwdev, RTW89_DBG_RA, "unset rate pattern\n");
 }
 
-static void rtw89_phy_ra_updata_sta_iter(void *data, struct ieee80211_sta *sta)
+static void rtw89_phy_ra_update_sta_iter(void *data, struct ieee80211_sta *sta)
 {
 	struct rtw89_dev *rtwdev = (struct rtw89_dev *)data;
 
-	rtw89_phy_ra_updata_sta(rtwdev, sta, IEEE80211_RC_SUPP_RATES_CHANGED);
+	rtw89_phy_ra_update_sta(rtwdev, sta, IEEE80211_RC_SUPP_RATES_CHANGED);
 }
 
 void rtw89_phy_ra_update(struct rtw89_dev *rtwdev)
 {
 	ieee80211_iterate_stations_atomic(rtwdev->hw,
-					  rtw89_phy_ra_updata_sta_iter,
+					  rtw89_phy_ra_update_sta_iter,
 					  rtwdev);
 }
 
@@ -2807,7 +2813,6 @@ static void rtw89_phy_cfo_set_crystal_cap(struct rtw89_dev *rtwdev,
 
 	if (!force && cfo->crystal_cap == crystal_cap)
 		return;
-	crystal_cap = clamp_t(u8, crystal_cap, 0, 127);
 	if (chip->chip_id == RTL8852A || chip->chip_id == RTL8851B) {
 		rtw89_phy_cfo_set_xcap_reg(rtwdev, true, crystal_cap);
 		rtw89_phy_cfo_set_xcap_reg(rtwdev, false, crystal_cap);
@@ -2930,7 +2935,7 @@ static void rtw89_phy_cfo_crystal_cap_adjust(struct rtw89_dev *rtwdev,
 					     s32 curr_cfo)
 {
 	struct rtw89_cfo_tracking_info *cfo = &rtwdev->cfo_tracking;
-	s8 crystal_cap = cfo->crystal_cap;
+	int crystal_cap = cfo->crystal_cap;
 	s32 cfo_abs = abs(curr_cfo);
 	int sign;
 
@@ -2951,15 +2956,17 @@ static void rtw89_phy_cfo_crystal_cap_adjust(struct rtw89_dev *rtwdev,
 	}
 	sign = curr_cfo > 0 ? 1 : -1;
 	if (cfo_abs > CFO_TRK_STOP_TH_4)
-		crystal_cap += 7 * sign;
-	else if (cfo_abs > CFO_TRK_STOP_TH_3)
-		crystal_cap += 5 * sign;
-	else if (cfo_abs > CFO_TRK_STOP_TH_2)
 		crystal_cap += 3 * sign;
+	else if (cfo_abs > CFO_TRK_STOP_TH_3)
+		crystal_cap += 3 * sign;
+	else if (cfo_abs > CFO_TRK_STOP_TH_2)
+		crystal_cap += 1 * sign;
 	else if (cfo_abs > CFO_TRK_STOP_TH_1)
 		crystal_cap += 1 * sign;
 	else
 		return;
+
+	crystal_cap = clamp(crystal_cap, 0, 127);
 	rtw89_phy_cfo_set_crystal_cap(rtwdev, (u8)crystal_cap, false);
 	rtw89_debug(rtwdev, RTW89_DBG_CFO,
 		    "X_cap{Curr,Default}={0x%x,0x%x}\n",
@@ -4381,7 +4388,7 @@ static void rtw89_phy_dig_update_para(struct rtw89_dev *rtwdev)
 	memcpy(dig->igi_rssi_th, igi_rssi_th, sizeof(dig->igi_rssi_th));
 }
 
-static const u8 pd_low_th_offset = 20, dynamic_igi_min = 0x20;
+static const u8 pd_low_th_offset = 16, dynamic_igi_min = 0x20;
 static const u8 igi_max_performance_mode = 0x5a;
 static const u8 dynamic_pd_threshold_max;
 
@@ -4679,38 +4686,48 @@ void rtw89_phy_dig_reset(struct rtw89_dev *rtwdev)
 }
 
 #define IGI_RSSI_MIN 10
+#define ABS_IGI_MIN 0xc
 void rtw89_phy_dig(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_dig_info *dig = &rtwdev->dig;
 	bool is_linked = rtwdev->total_sta_assoc > 0;
+	u8 igi_min;
 
 	if (unlikely(dig->bypass_dig)) {
 		dig->bypass_dig = false;
 		return;
 	}
 
+	rtw89_phy_dig_update_rssi_info(rtwdev);
+
 	if (!dig->is_linked_pre && is_linked) {
 		rtw89_debug(rtwdev, RTW89_DBG_DIG, "First connected\n");
 		rtw89_phy_dig_update_para(rtwdev);
+		dig->igi_fa_rssi = dig->igi_rssi;
 	} else if (dig->is_linked_pre && !is_linked) {
 		rtw89_debug(rtwdev, RTW89_DBG_DIG, "First disconnected\n");
 		rtw89_phy_dig_update_para(rtwdev);
+		dig->igi_fa_rssi = dig->igi_rssi;
 	}
 	dig->is_linked_pre = is_linked;
 
 	rtw89_phy_dig_igi_offset_by_env(rtwdev);
-	rtw89_phy_dig_update_rssi_info(rtwdev);
 
-	dig->dyn_igi_min = (dig->igi_rssi > IGI_RSSI_MIN) ?
-			    dig->igi_rssi - IGI_RSSI_MIN : 0;
-	dig->dyn_igi_max = dig->dyn_igi_min + IGI_OFFSET_MAX;
-	dig->igi_fa_rssi = dig->dyn_igi_min + dig->fa_rssi_ofst;
+	igi_min = max_t(int, dig->igi_rssi - IGI_RSSI_MIN, 0);
+	dig->dyn_igi_max = min((u8)(igi_min + IGI_OFFSET_MAX),
+			       igi_max_performance_mode);
+	dig->dyn_igi_min = max_t(u8, igi_min, ABS_IGI_MIN);
 
-	dig->igi_fa_rssi = clamp(dig->igi_fa_rssi, dig->dyn_igi_min,
-				 dig->dyn_igi_max);
+	if (dig->dyn_igi_max >= dig->dyn_igi_min) {
+		dig->igi_fa_rssi += dig->fa_rssi_ofst;
+		dig->igi_fa_rssi = clamp(dig->igi_fa_rssi, dig->dyn_igi_min,
+					 dig->dyn_igi_max);
+	} else {
+		dig->igi_fa_rssi = dig->dyn_igi_max;
+	}
 
 	rtw89_debug(rtwdev, RTW89_DBG_DIG,
-		    "rssi=%03d, dyn(max,min)=(%d,%d), final_rssi=%d\n",
+		    "rssi=%03d, dyn_joint(max,min)=(%d,%d), final_rssi=%d\n",
 		    dig->igi_rssi, dig->dyn_igi_max, dig->dyn_igi_min,
 		    dig->igi_fa_rssi);
 
@@ -4929,7 +4946,9 @@ static void rtw89_phy_edcca_init(struct rtw89_dev *rtwdev)
 	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
 	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
 
+	rtwdev->hal.edcca_mode = RTW89_EDCCA_NORMAL;
 	memset(edcca_bak, 0, sizeof(*edcca_bak));
+	rtw89_phy_recalc_edcca_mode(rtwdev);
 
 	if (rtwdev->chip->chip_id == RTL8922A && rtwdev->hal.cv == CHIP_CAV) {
 		rtw89_phy_set_phy_regs(rtwdev, R_TXGATING, B_TXGATING_EN, 0);
@@ -5354,6 +5373,140 @@ static void rtw89_phy_edcca_log(struct rtw89_dev *rtwdev)
 		    pwdb_fb, pwdb_p20, pwdb_s20, pwdb_s40, pwdb_s80);
 }
 
+static int rtw89_phy_edcca_set_sifs_chk(struct rtw89_dev *rtwdev, u8 band, bool enable)
+{
+	static const u32 cca_mask = B_AX_SIFS_CHK_EDCCA | B_AX_SIFS_CHK_CCA_S80 |
+				    B_AX_SIFS_CHK_CCA_S40 | B_AX_SIFS_CHK_CCA_S20;
+	int ret;
+	u32 reg;
+
+	ret = rtw89_mac_check_mac_en(rtwdev, band, RTW89_CMAC_SEL);
+	if (ret)
+		return ret;
+
+	reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_CCA_CONTROL, band);
+
+	if (enable)
+		rtw89_write32_set(rtwdev, reg, cca_mask);
+	else
+		rtw89_write32_clr(rtwdev, reg, cca_mask);
+
+	return 0;
+}
+
+static int rtw89_phy_edcca_set_resp_chk(struct rtw89_dev *rtwdev, u8 band, bool enable)
+{
+	static const u32 cca_mask = B_AX_WMAC_RESP_ACK_BA_CHK_CCA;
+	int ret;
+	u32 reg;
+
+	ret = rtw89_mac_check_mac_en(rtwdev, band, RTW89_CMAC_SEL);
+	if (ret)
+		return ret;
+
+	if (rtwdev->chip->chip_id == RTL8852A ||
+	    (rtwdev->chip->chip_id == RTL8852B && rtwdev->hal.cv == CHIP_CAV) ||
+	    rtwdev->chip->chip_id == RTL8852C) {
+		return 0;
+	}
+
+	reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_TRXPTCL_RESP_0, band);
+
+	if (enable)
+		rtw89_write32_set(rtwdev, reg, cca_mask);
+	else
+		rtw89_write32_clr(rtwdev, reg, cca_mask);
+
+	return 0;
+}
+
+static int rtw89_phy_edcca_update_tx_cfg_by_mode(struct rtw89_dev *rtwdev)
+{
+	bool enable = true;
+	int ret;
+
+	if (rtwdev->hal.edcca_mode == RTW89_EDCCA_NORMAL)
+		enable = false;
+
+	ret = rtw89_phy_edcca_set_sifs_chk(rtwdev, RTW89_MAC_0, enable);
+	if (ret)
+		return ret;
+
+	ret = rtw89_phy_edcca_set_resp_chk(rtwdev, RTW89_MAC_0, enable);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+void rtw89_phy_recalc_edcca_mode(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_hal *hal = &rtwdev->hal;
+	const struct rtw89_chan *chan;
+	int ret;
+	u8 regd;
+
+	if (!hal->edcca_test)
+		return;
+
+	chan = rtw89_chan_get(rtwdev, RTW89_SUB_ENTITY_0);
+	regd = rtwdev->regulatory.regd->txpwr_regd[chan->band_type];
+
+	switch (regd) {
+	case RTW89_ETSI:
+		hal->edcca_mode = RTW89_EDCCA_ADAPT;
+		break;
+	case RTW89_MKK:
+		hal->edcca_mode = RTW89_EDCCA_CS;
+		break;
+	case RTW89_FCC:
+		hal->edcca_mode = RTW89_EDCCA_CBP;
+		break;
+	case RTW89_UK:
+		hal->edcca_mode = RTW89_EDCCA_UK;
+		break;
+	case RTW89_CN:
+		hal->edcca_mode = RTW89_EDCCA_SRRC;
+		break;
+	default:
+		hal->edcca_mode = RTW89_EDCCA_NORMAL;
+		break;
+	}
+
+	ret = rtw89_phy_edcca_update_tx_cfg_by_mode(rtwdev);
+	if (ret)
+		rtw89_warn(rtwdev, "failed to update EDCCA tx cfg: %d\n", ret);
+}
+
+static void rtw89_phy_set_edcca_threshold(struct rtw89_dev *rtwdev, u8 th, u8 th_diff)
+{
+	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
+	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
+	const struct rtw89_chip_info *chip = rtwdev->chip;
+	struct rtw89_hal *hal = &rtwdev->hal;
+
+	if (th == edcca_bak->th_old)
+		return;
+
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
+			       edcca_regs->edcca_mask, th);
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
+			       edcca_regs->edcca_p_mask, th);
+	rtw89_phy_write32_mask(rtwdev, edcca_regs->ppdu_level,
+			       edcca_regs->ppdu_mask, th);
+	if (rtwdev->hal.edcca_test)
+		rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_dwn_level,
+				       edcca_regs->edcca_dwn_mask, th_diff);
+
+	rtw89_debug(rtwdev, RTW89_DBG_EDCCA,
+		    "[EDCCA] threshold {CBP, 5G, 2G, CS} = {%d(dBm), %d(dBm), %d(dBm), %d(dBm)}",
+		    chip->edcca_th->edcca_cbp_th_6g, chip->edcca_th->edcca_th_5g,
+		    chip->edcca_th->edcca_th_2g, chip->edcca_th->edcca_cs_th);
+	rtw89_debug(rtwdev, RTW89_DBG_EDCCA,
+		    "[EDCCA]: Mode %d, EDCCA_th = %d EDCCA_hl_diff = %d\n",
+		    hal->edcca_mode, th, th_diff);
+}
+
 static u8 rtw89_phy_edcca_get_thre_by_rssi(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_phy_ch_info *ch_info = &rtwdev->ch_info;
@@ -5372,37 +5525,94 @@ static u8 rtw89_phy_edcca_get_thre_by_rssi(struct rtw89_dev *rtwdev)
 	return edcca_thre;
 }
 
-void rtw89_phy_edcca_thre_calc(struct rtw89_dev *rtwdev)
+static void rtw89_phy_edcca_ic_setting(struct rtw89_dev *rtwdev)
 {
-	const struct rtw89_edcca_regs *edcca_regs = rtwdev->chip->edcca_regs;
-	struct rtw89_edcca_bak *edcca_bak = &rtwdev->hal.edcca_bak;
-	u8 th;
+	const struct rtw89_chip_info *chip = rtwdev->chip;
+	struct rtw89_hal *hal = &rtwdev->hal;
 
-	th = rtw89_phy_edcca_get_thre_by_rssi(rtwdev);
-	if (th == edcca_bak->th_old)
+	if (!rtwdev->hal.edcca_test)
 		return;
 
-	edcca_bak->th_old = th;
+	if (chip->chip_id != RTL8922A)
+		return;
 
-	rtw89_debug(rtwdev, RTW89_DBG_EDCCA,
-		    "[EDCCA]: Normal Mode, EDCCA_th = %d\n", th);
+	if (hal->cv == CHIP_CAV && hal->edcca_mode != RTW89_EDCCA_NORMAL)
+		rtw89_phy_set_phy_regs(rtwdev, R_CTLTOP, B_CTLTOP_ON, 1);
 
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
-			       edcca_regs->edcca_mask, th);
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->edcca_level,
-			       edcca_regs->edcca_p_mask, th);
-	rtw89_phy_write32_mask(rtwdev, edcca_regs->ppdu_level,
-			       edcca_regs->ppdu_mask, th);
+	if (hal->edcca_mode == RTW89_EDCCA_CS || hal->edcca_mode == RTW89_EDCCA_CBP) {
+		rtw89_phy_set_phy_regs(rtwdev, R_DCCL, B_DCCL_AFTER_ADC, 0);
+		rtw89_phy_write32_idx(rtwdev, R_DC_REMOVE_BE1, B_DC_REMOVE_BE1_MSK, 0,
+				      RTW89_PHY_0);
+	}
 }
 
 void rtw89_phy_edcca_track(struct rtw89_dev *rtwdev)
 {
+	const struct rtw89_chip_info *chip = rtwdev->chip;
 	struct rtw89_hal *hal = &rtwdev->hal;
+	const struct rtw89_chan *chan = rtw89_chan_get(rtwdev, RTW89_SUB_ENTITY_0);
+	u8 th, th_hl_diff;
 
 	if (hal->disabled_dm_bitmap & BIT(RTW89_DM_DYNAMIC_EDCCA))
 		return;
 
-	rtw89_phy_edcca_thre_calc(rtwdev);
+	rtw89_phy_edcca_ic_setting(rtwdev);
+
+	switch (hal->edcca_mode) {
+	case RTW89_EDCCA_NORMAL:
+		th = rtw89_phy_edcca_get_thre_by_rssi(rtwdev);
+		th_hl_diff = EDCCA_HL_DIFF_NORMAL;
+		break;
+	case RTW89_EDCCA_ADAPT:
+		if (chan->band_type == RTW89_BAND_2G)
+			th = chip->edcca_th->edcca_th_2g;
+		else if (chan->band_type == RTW89_BAND_5G)
+			th = chip->edcca_th->edcca_th_5g - 5;
+		else
+			th = chip->edcca_th->edcca_cbp_th_6g;
+
+		th_hl_diff = EDCCA_HL_DIFF_ADAPTIVITY;
+		break;
+	case RTW89_EDCCA_CS:
+		th = chip->edcca_th->edcca_cs_th;
+		th_hl_diff = EDCCA_HL_DIFF_ADAPTIVITY;
+		break;
+	case RTW89_EDCCA_CBP:
+		if (chan->band_type == RTW89_BAND_6G && chan->band_width == RTW89_CHANNEL_WIDTH_160)
+			th =  chip->edcca_th->edcca_cbp_th_6g - 7;
+		else if (chan->band_type == RTW89_BAND_6G)
+			th =  chip->edcca_th->edcca_cbp_th_6g;
+		else
+			th = rtw89_phy_edcca_get_thre_by_rssi(rtwdev);
+
+		th_hl_diff = EDCCA_HL_DIFF_ADAPTIVITY;
+		break;
+	case RTW89_EDCCA_UK:
+		if (chan->band_type == RTW89_BAND_2G)
+			th = chip->edcca_th->edcca_th_2g;
+		else if (chan->band_type == RTW89_BAND_5G)
+			th = chip->edcca_th->edcca_th_5g - 10;
+		else
+			th = chip->edcca_th->edcca_cbp_th_6g;
+
+		th_hl_diff = EDCCA_HL_DIFF_ADAPTIVITY;
+		break;
+	case RTW89_EDCCA_SRRC:
+		if (chan->band_type == RTW89_BAND_2G)
+			th = chip->edcca_th->edcca_th_2g;
+		else
+			th = chip->edcca_th->edcca_th_5g;
+
+		th_hl_diff = EDCCA_HL_DIFF_ADAPTIVITY;
+		break;
+	default:
+		break;
+	}
+
+	if (rtwdev->hal.edcca_offset)
+		th = rtwdev->hal.edcca_offset;
+
+	rtw89_phy_set_edcca_threshold(rtwdev, th, th_hl_diff);
 	rtw89_phy_edcca_log(rtwdev);
 }
 

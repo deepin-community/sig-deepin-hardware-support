@@ -180,10 +180,19 @@ static const struct rtw89_dig_regs rtw8922a_dig_regs = {
 			      B_PATH1_S20_FOLLOW_BY_PAGCUGC_EN_MSK},
 };
 
+static const struct rtw89_edcca_thresholds rtw8922a_edcca_th = {
+	.edcca_th_2g = EDCCA_2G,
+	.edcca_th_5g = EDCCA_5G,
+	.edcca_cbp_th_6g = CBP_6G,
+	.edcca_cs_th = CARRIER_SENSE,
+};
+
 static const struct rtw89_edcca_regs rtw8922a_edcca_regs = {
 	.edcca_level			= R_SEG0R_EDCCA_LVL_BE,
 	.edcca_mask			= B_EDCCA_LVL_MSK0,
 	.edcca_p_mask			= B_EDCCA_LVL_MSK1,
+	.edcca_dwn_level		= R_SEG0R_EDCCA_DWN_LVL_BE,
+	.edcca_dwn_mask			= B_SEG0R_EDCCA_DWN_LVL_BE,
 	.ppdu_level			= R_SEG0R_PPDU_LVL_BE,
 	.ppdu_mask			= B_EDCCA_LVL_MSK1,
 	.rpt_a				= R_EDCCA_RPT_A_BE,
@@ -1592,6 +1601,38 @@ static void rtw8922a_query_ppdu(struct rtw89_dev *rtwdev,
 		rtw8922a_fill_freq_with_ppdu(rtwdev, phy_ppdu, status);
 }
 
+static void rtw8922a_convert_rpl_to_rssi(struct rtw89_dev *rtwdev,
+					 struct rtw89_rx_phy_ppdu *phy_ppdu)
+{
+	/* Mapping to BW: 5, 10, 20, 40, 80, 160, 80_80 */
+	static const u8 bw_compensate[] = {0, 0, 0, 6, 12, 18, 0};
+	u8 *rssi = phy_ppdu->rssi;
+	u8 compensate = 0;
+	u16 rpl_tmp;
+	u8 i;
+
+	if (phy_ppdu->bw_idx < ARRAY_SIZE(bw_compensate))
+		compensate = bw_compensate[phy_ppdu->bw_idx];
+
+	for (i = 0; i < RF_PATH_NUM_8922A; i++) {
+		if (!(phy_ppdu->rx_path_en & BIT(i))) {
+			rssi[i] = 0;
+			phy_ppdu->rpl_path[i] = 0;
+			phy_ppdu->rpl_fd[i] = 0;
+		}
+		if (phy_ppdu->rate >= RTW89_HW_RATE_OFDM6) {
+			rpl_tmp = phy_ppdu->rpl_fd[i];
+			if (rpl_tmp)
+				rpl_tmp += compensate;
+
+			phy_ppdu->rpl_path[i] = rpl_tmp;
+		}
+		rssi[i] = phy_ppdu->rpl_path[i];
+	}
+
+	phy_ppdu->rssi_avg = phy_ppdu->rpl_avg;
+}
+
 static int rtw8922a_mac_enable_bb_rf(struct rtw89_dev *rtwdev)
 {
 	rtw89_write8_set(rtwdev, R_BE_FEN_RST_ENABLE,
@@ -1951,7 +1992,9 @@ const struct rtw89_chip_info rtw8922a_chip_info = {
 	.support_unii4		= true,
 	.ul_tb_waveform_ctrl	= false,
 	.ul_tb_pwr_diff		= false,
+	.rx_freq_frome_ie	= false,
 	.hw_sec_hdr		= true,
+	.hw_mgmt_tx_encrypt	= true,
 	.rf_path_num		= 2,
 	.tx_nss			= 2,
 	.rx_nss			= 2,
@@ -2018,6 +2061,7 @@ const struct rtw89_chip_info rtw8922a_chip_info = {
 	.rfkill_get		= {},
 	.dma_ch_mask		= 0,
 	.edcca_regs		= &rtw8922a_edcca_regs,
+	.edcca_th		= &rtw8922a_edcca_th,
 #ifdef CONFIG_PM
 	.wowlan_stub		= &rtw_wowlan_stub_8922a,
 #endif

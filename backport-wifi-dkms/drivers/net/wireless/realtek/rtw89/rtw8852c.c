@@ -171,10 +171,19 @@ static const struct rtw89_dig_regs rtw8852c_dig_regs = {
 			      B_PATH1_S20_FOLLOW_BY_PAGCUGC_EN_MSK},
 };
 
+static const struct rtw89_edcca_thresholds rtw8852c_edcca_th = {
+	.edcca_th_2g = EDCCA_2G - 3,
+	.edcca_th_5g = EDCCA_5G - 3,
+	.edcca_cbp_th_6g = CBP_6G,
+	.edcca_cs_th = CARRIER_SENSE - 10,
+};
+
 static const struct rtw89_edcca_regs rtw8852c_edcca_regs = {
 	.edcca_level			= R_SEG0R_EDCCA_LVL,
 	.edcca_mask			= B_EDCCA_LVL_MSK0,
 	.edcca_p_mask			= B_EDCCA_LVL_MSK1,
+	.edcca_dwn_level		= R_SEG0R_EDCCA_DWN_V2,
+	.edcca_dwn_mask			= B_SEG0R_EDCCA_DWN_LVL_V2,
 	.ppdu_level			= R_SEG0R_EDCCA_LVL,
 	.ppdu_mask			= B_EDCCA_LVL_MSK3,
 	.rpt_a				= R_EDCCA_RPT_A,
@@ -206,6 +215,9 @@ static int rtw8852c_pwr_on_func(struct rtw89_dev *rtwdev)
 	rtw89_write32_set(rtwdev, R_AX_WLLPS_CTRL, B_AX_DIS_WLBT_LPSEN_LOPC);
 	rtw89_write32_clr(rtwdev, R_AX_SYS_PW_CTRL, B_AX_APDM_HPDN);
 	rtw89_write32_clr(rtwdev, R_AX_SYS_PW_CTRL, B_AX_APFM_SWLPS);
+
+	rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_ON_CTRL0,
+			   B_AX_OCP_L1_MASK, 0x7);
 
 	ret = read_poll_timeout(rtw89_read32, val32, val32 & B_AX_RDY_SYSPWR,
 				1000, 20000, false, rtwdev, R_AX_SYS_PW_CTRL);
@@ -270,7 +282,7 @@ static int rtw8852c_pwr_on_func(struct rtw89_dev *rtwdev)
 	ret = rtw89_mac_write_xtal_si(rtwdev, XTAL_SI_ANAPAR_WL, 0, XTAL_SI_SRAM2RFC);
 	if (ret)
 		return ret;
-	ret = rtw89_mac_write_xtal_si(rtwdev, XTAL_SI_XTAL_XMD_2, 0, XTAL_SI_LDO_LPS);
+	ret = rtw89_mac_write_xtal_si(rtwdev, XTAL_SI_XTAL_XMD_2, 0x10, XTAL_SI_LDO_LPS);
 	if (ret)
 		return ret;
 	ret = rtw89_mac_write_xtal_si(rtwdev, XTAL_SI_XTAL_XMD_4, 0, XTAL_SI_LPS_CAP);
@@ -342,6 +354,7 @@ static int rtw8852c_pwr_off_func(struct rtw89_dev *rtwdev)
 		return ret;
 
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_EN_WLON);
+	rtw89_write32_clr(rtwdev, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG);
 	rtw89_write8_clr(rtwdev, R_AX_SYS_FUNC_EN, B_AX_FEN_BB_GLB_RSTN | B_AX_FEN_BBRSTB);
 	rtw89_write32_clr(rtwdev, R_AX_SYS_ISO_CTRL_EXTEND,
 			  B_AX_R_SYM_FEN_WLBBGLB_1 | B_AX_R_SYM_FEN_WLBBFUN_1);
@@ -364,8 +377,11 @@ static int rtw8852c_pwr_off_func(struct rtw89_dev *rtwdev)
 	if (ret)
 		return ret;
 
-	rtw89_write32(rtwdev, R_AX_WLLPS_CTRL, 0x0001A0B0);
+	rtw89_write32(rtwdev, R_AX_WLLPS_CTRL, SW_LPS_OPTION);
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_XTAL_OFF_A_DIE);
+	rtw89_write32_set(rtwdev, R_AX_SYS_SWR_CTRL1, B_AX_SYM_CTRL_SPS_PWMFREQ);
+	rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_ON_CTRL0,
+			   B_AX_REG_ZCDC_H_MASK, 0x3);
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_APFM_SWLPS);
 
 	return 0;
@@ -2826,6 +2842,7 @@ static int rtw8852c_mac_enable_bb_rf(struct rtw89_dev *rtwdev)
 
 static int rtw8852c_mac_disable_bb_rf(struct rtw89_dev *rtwdev)
 {
+	rtw89_write32_clr(rtwdev, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG);
 	rtw89_write8_clr(rtwdev, R_AX_SYS_FUNC_EN,
 			 B_AX_FEN_BBRSTB | B_AX_FEN_BB_GLB_RSTN);
 
@@ -2872,6 +2889,7 @@ static const struct rtw89_chip_ops rtw8852c_chip_ops = {
 	.get_thermal		= rtw8852c_get_thermal,
 	.ctrl_btg_bt_rx		= rtw8852c_ctrl_btg_bt_rx,
 	.query_ppdu		= rtw8852c_query_ppdu,
+	.convert_rpl_to_rssi	= NULL,
 	.ctrl_nbtg_bt_tx	= rtw8852c_ctrl_nbtg_bt_tx,
 	.cfg_txrx_path		= rtw8852c_bb_cfg_txrx_path,
 	.set_txpwr_ul_tb_offset	= rtw8852c_set_txpwr_ul_tb_offset,
@@ -2952,7 +2970,9 @@ const struct rtw89_chip_info rtw8852c_chip_info = {
 	.support_unii4		= true,
 	.ul_tb_waveform_ctrl	= false,
 	.ul_tb_pwr_diff		= true,
+	.rx_freq_frome_ie	= false,
 	.hw_sec_hdr		= true,
+	.hw_mgmt_tx_encrypt	= true,
 	.rf_path_num		= 2,
 	.tx_nss			= 2,
 	.rx_nss			= 2,
@@ -3021,6 +3041,7 @@ const struct rtw89_chip_info rtw8852c_chip_info = {
 	.rfkill_get		= {R_AX_GPIO_EXT_CTRL, B_AX_GPIO_IN_9},
 	.dma_ch_mask		= 0,
 	.edcca_regs		= &rtw8852c_edcca_regs,
+	.edcca_th		= &rtw8852c_edcca_th,
 #ifdef CONFIG_PM
 	.wowlan_stub		= &rtw_wowlan_stub_8852c,
 #endif

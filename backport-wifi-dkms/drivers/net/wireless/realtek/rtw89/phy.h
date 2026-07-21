@@ -57,7 +57,7 @@
 #define CFO_TRK_STOP_TH_4 (30 << 2)
 #define CFO_TRK_STOP_TH_3 (20 << 2)
 #define CFO_TRK_STOP_TH_2 (10 << 2)
-#define CFO_TRK_STOP_TH_1 (00 << 2)
+#define CFO_TRK_STOP_TH_1 (03 << 2)
 #define CFO_TRK_STOP_TH (2 << 2)
 #define CFO_SW_COMP_FINE_TUNE (2 << 2)
 #define CFO_PERIOD_CNT 15
@@ -123,10 +123,15 @@
 #define PHYSTS_RSVD BIT(RTW89_RX_TYPE_RSVD)
 #define PPDU_FILTER_BITMAP (PHYSTS_MGNT | PHYSTS_DATA)
 
+#define EDCCA_HL_DIFF_ADAPTIVITY 7
+#define EDCCA_HL_DIFF_NORMAL 8
+#define CBP_6G 53
+#define EDCCA_5G 63
+#define EDCCA_2G 68
+#define CARRIER_SENSE 75
 #define EDCCA_MAX 249
 #define EDCCA_TH_L2H_LB 66
 #define EDCCA_TH_REF 3
-#define EDCCA_HL_DIFF_NORMAL 8
 #define RSSI_UNIT_CONVER 110
 #define EDCCA_UNIT_CONVER 128
 #define EDCCA_PWROFST_DEFAULT 18
@@ -874,7 +879,7 @@ void rtw89_phy_set_txpwr_limit_ru(struct rtw89_dev *rtwdev,
 
 void rtw89_phy_ra_assoc(struct rtw89_dev *rtwdev, struct ieee80211_sta *sta);
 void rtw89_phy_ra_update(struct rtw89_dev *rtwdev);
-void rtw89_phy_ra_updata_sta(struct rtw89_dev *rtwdev, struct ieee80211_sta *sta,
+void rtw89_phy_ra_update_sta(struct rtw89_dev *rtwdev, struct ieee80211_sta *sta,
 			     u32 changed);
 void rtw89_phy_rate_pattern_vif(struct rtw89_dev *rtwdev,
 				struct ieee80211_vif *vif,
@@ -911,6 +916,6 @@ void rtw89_decode_chan_idx(struct rtw89_dev *rtwdev, u8 chan_idx,
 			   u8 *ch, enum nl80211_band *band);
 void rtw89_phy_config_edcca(struct rtw89_dev *rtwdev, bool scan);
 void rtw89_phy_edcca_track(struct rtw89_dev *rtwdev);
-void rtw89_phy_edcca_thre_calc(struct rtw89_dev *rtwdev);
+void rtw89_phy_recalc_edcca_mode(struct rtw89_dev *rtwdev);
 
 #endif

@@ -338,6 +338,8 @@ static const struct rtw89_edcca_regs rtw8852b_edcca_regs = {
 	.edcca_level			= R_SEG0R_EDCCA_LVL_V1,
 	.edcca_mask			= B_EDCCA_LVL_MSK0,
 	.edcca_p_mask			= B_EDCCA_LVL_MSK1,
+	.edcca_dwn_level		= R_PWOFST,
+	.edcca_dwn_mask			= B_SEG0R_EDCCA_DWN_LVL,
 	.ppdu_level			= R_SEG0R_EDCCA_LVL_V1,
 	.ppdu_mask			= B_EDCCA_LVL_MSK3,
 	.rpt_a				= R_EDCCA_RPT_A,
@@ -346,6 +348,13 @@ static const struct rtw89_edcca_regs rtw8852b_edcca_regs = {
 	.rpt_sel_mask			= B_EDCCA_RPT_SEL_MSK,
 	.tx_collision_t2r_st		= R_TX_COLLISION_T2R_ST,
 	.tx_collision_t2r_st_mask	= B_TX_COLLISION_T2R_ST_M,
+};
+
+static const struct rtw89_edcca_thresholds rtw8852b_edcca_th = {
+	.edcca_th_2g = EDCCA_2G,
+	.edcca_th_5g = EDCCA_5G,
+	.edcca_cbp_th_6g = 0,
+	.edcca_cs_th = CARRIER_SENSE - 6,
 };
 
 static const struct rtw89_btc_rf_trx_para rtw89_btc_8852b_rf_ul[] = {
@@ -402,10 +411,33 @@ static void rtw8852b_pwr_sps_ana(struct rtw89_dev *rtwdev)
 		rtw89_write16(rtwdev, R_AX_SPS_ANA_ON_CTRL2, RTL8852B_RFE_05_SPS_ANA);
 }
 
+static void rtw8852b_pwr_sps_dig_off(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_efuse *efuse = &rtwdev->efuse;
+
+	if (efuse->rfe_type == 0x5) {
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_C1_L1_MASK, 0x1);
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_C2_L1_MASK, 0x1);
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_C3_L1_MASK, 0x2);
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_R1_L1_MASK, 0x1);
+	} else {
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_C1_L1_MASK, 0x1);
+		rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0,
+				   B_AX_C3_L1_MASK, 0x3);
+	}
+}
+
 static int rtw8852b_pwr_on_func(struct rtw89_dev *rtwdev)
 {
 	u32 val32;
 	int ret;
+
+	rtw8852b_pwr_sps_ana(rtwdev);
 
 	rtw89_write32_clr(rtwdev, R_AX_SYS_PW_CTRL, B_AX_AFSM_WLSUS_EN |
 						    B_AX_AFSM_PCIE_SUS_EN);
@@ -425,8 +457,7 @@ static int rtw8852b_pwr_on_func(struct rtw89_dev *rtwdev)
 	if (ret)
 		return ret;
 
-	rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0, B_AX_C1_L1_MASK, 0x1);
-	rtw89_write32_mask(rtwdev, R_AX_SPS_DIG_OFF_CTRL0, B_AX_C3_L1_MASK, 0x3);
+	rtw8852b_pwr_sps_dig_off(rtwdev);
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_EN_WLON);
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_APFN_ONMAC);
 
@@ -534,9 +565,7 @@ static int rtw8852b_pwr_off_func(struct rtw89_dev *rtwdev)
 	u32 val32;
 	int ret;
 
-	/* Only do once during probe stage after reading efuse */
-	if (!test_bit(RTW89_FLAG_PROBE_DONE, rtwdev->flags))
-		rtw8852b_pwr_sps_ana(rtwdev);
+	rtw8852b_pwr_sps_ana(rtwdev);
 
 	ret = rtw89_mac_write_xtal_si(rtwdev, XTAL_SI_ANAPAR_WL, XTAL_SI_RFC2RF,
 				      XTAL_SI_RFC2RF);
@@ -566,6 +595,7 @@ static int rtw8852b_pwr_off_func(struct rtw89_dev *rtwdev)
 		return ret;
 
 	rtw89_write32_set(rtwdev, R_AX_SYS_PW_CTRL, B_AX_EN_WLON);
+	rtw89_write32_clr(rtwdev, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG);
 	rtw89_write8_clr(rtwdev, R_AX_SYS_FUNC_EN, B_AX_FEN_BB_GLB_RSTN | B_AX_FEN_BBRSTB);
 	rtw89_write32_clr(rtwdev, R_AX_SYS_ADIE_PAD_PWR_CTRL, B_AX_SYM_PADPDN_WL_RFC_1P3);
 
@@ -2459,6 +2489,19 @@ static void rtw8852b_query_ppdu(struct rtw89_dev *rtwdev,
 		rtw8852b_fill_freq_with_ppdu(rtwdev, phy_ppdu, status);
 }
 
+static void rtw8852b_convert_rpl_to_rssi(struct rtw89_dev *rtwdev,
+					 struct rtw89_rx_phy_ppdu *phy_ppdu)
+{
+	u8 delta = phy_ppdu->rpl_avg - phy_ppdu->rssi_avg;
+	u8 *rssi = phy_ppdu->rssi;
+	u8 i;
+
+	for (i = 0; i < rtwdev->chip->rf_path_num; i++)
+		rssi[i] += delta;
+
+	phy_ppdu->rssi_avg = phy_ppdu->rpl_avg;
+}
+
 static int rtw8852b_mac_enable_bb_rf(struct rtw89_dev *rtwdev)
 {
 	int ret;
@@ -2491,6 +2534,7 @@ static int rtw8852b_mac_disable_bb_rf(struct rtw89_dev *rtwdev)
 	u8 wl_rfc_s1;
 	int ret;
 
+	rtw89_write32_clr(rtwdev, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG);
 	rtw89_write8_clr(rtwdev, R_AX_SYS_FUNC_EN,
 			 B_AX_FEN_BBRSTB | B_AX_FEN_BB_GLB_RSTN);
 
@@ -2539,6 +2583,7 @@ static const struct rtw89_chip_ops rtw8852b_chip_ops = {
 	.get_thermal		= rtw8852b_get_thermal,
 	.ctrl_btg_bt_rx		= rtw8852b_ctrl_btg_bt_rx,
 	.query_ppdu		= rtw8852b_query_ppdu,
+	.convert_rpl_to_rssi	= rtw8852b_convert_rpl_to_rssi,
 	.ctrl_nbtg_bt_tx	= rtw8852b_ctrl_nbtg_bt_tx,
 	.cfg_txrx_path		= rtw8852b_bb_cfg_txrx_path,
 	.set_txpwr_ul_tb_offset	= rtw8852b_set_txpwr_ul_tb_offset,
@@ -2625,7 +2670,9 @@ const struct rtw89_chip_info rtw8852b_chip_info = {
 	.support_unii4		= true,
 	.ul_tb_waveform_ctrl	= true,
 	.ul_tb_pwr_diff		= false,
+	.rx_freq_frome_ie	= true,
 	.hw_sec_hdr		= false,
+	.hw_mgmt_tx_encrypt	= false,
 	.rf_path_num		= 2,
 	.tx_nss			= 2,
 	.rx_nss			= 2,
@@ -2695,6 +2742,7 @@ const struct rtw89_chip_info rtw8852b_chip_info = {
 				  BIT(RTW89_DMA_ACH6) | BIT(RTW89_DMA_ACH7) |
 				  BIT(RTW89_DMA_B1MG) | BIT(RTW89_DMA_B1HI),
 	.edcca_regs		= &rtw8852b_edcca_regs,
+	.edcca_th		= &rtw8852b_edcca_th,
 #ifdef CONFIG_PM
 	.wowlan_stub		= &rtw_wowlan_stub_8852b,
 #endif

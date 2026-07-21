@@ -117,6 +117,81 @@ void rtw89_assert_chip_info_ ## t(void) \
 })
 #endif
 
+#ifndef __cleanup
+#define __cleanup(func)			__attribute__((__cleanup__(func)))
+
+#ifdef __clang__
+#undef __cleanup
+#define __cleanup(func) __maybe_unused __attribute__((__cleanup__(func)))
+#endif
+#endif
+
+#ifndef CLASS
+#define CLASS(_name, var)						\
+	class_##_name##_t var __cleanup(class_##_name##_destructor) =	\
+		class_##_name##_constructor
+#endif
+
+#ifndef guard
+#define guard(_name) \
+	CLASS(_name, __UNIQUE_ID(guard))
+#endif
+
+#ifndef __DEFINE_CLASS_IS_CONDITIONAL
+#define __DEFINE_CLASS_IS_CONDITIONAL(_name, _is_cond)	\
+static __maybe_unused const bool class_##_name##_is_conditional = _is_cond
+#endif
+
+#ifndef __DEFINE_UNLOCK_GUARD
+#define __DEFINE_UNLOCK_GUARD(_name, _type, _unlock, ...)		\
+typedef struct {							\
+	_type *lock;							\
+	__VA_ARGS__;							\
+} class_##_name##_t;							\
+									\
+static inline void class_##_name##_destructor(class_##_name##_t *_T)	\
+{									\
+	if (_T->lock) { _unlock; }					\
+}									\
+									\
+static inline void *class_##_name##_lock_ptr(class_##_name##_t *_T)	\
+{									\
+	return (void *)(__force unsigned long)_T->lock;			\
+}
+#endif
+
+#ifndef __DEFINE_LOCK_GUARD_0
+#define __DEFINE_LOCK_GUARD_0(_name, _lock)				\
+static inline class_##_name##_t class_##_name##_constructor(void)	\
+{									\
+	class_##_name##_t _t = { .lock = (void*)1 },			\
+			 *_T __maybe_unused = &_t;			\
+	_lock;								\
+	return _t;							\
+}
+#endif
+
+#ifndef DEFINE_LOCK_GUARD_0
+#define DEFINE_LOCK_GUARD_0(_name, _lock, _unlock, ...)			\
+__DEFINE_CLASS_IS_CONDITIONAL(_name, false);				\
+__DEFINE_UNLOCK_GUARD(_name, void, _unlock, __VA_ARGS__)		\
+__DEFINE_LOCK_GUARD_0(_name, _lock)
+
+DEFINE_LOCK_GUARD_0(rcu,
+	do {
+		rcu_read_lock();
+		/*
+		 * sparse doesn't call the cleanup function,
+		 * so just release immediately and don't track
+		 * the context. We don't need to anyway, since
+		 * the whole point of the guard is to not need
+		 * the explicit unlock.
+		 */
+		__release(RCU);
+	} while (0),
+	rcu_read_unlock())
+#endif
+
 #include <linux/version.h>
 
 /**
@@ -296,8 +371,52 @@ static inline bool ieee80211_is_trigger(__le16 fc)
 #define IEEE80211_TRIGGER_ULBW_160_80P80MHZ	0x3
 #endif
 
+static inline
+int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
+				    enum nl80211_band band)
+{
+	const struct element *tmp;
 
+	if (band == NL80211_BAND_6GHZ) {
+		struct ieee80211_he_operation *he_oper;
 
+		tmp = cfg80211_find_ext_elem(WLAN_EID_EXT_HE_OPERATION, ie,
+					     ielen);
+		if (tmp && tmp->datalen >= sizeof(*he_oper) &&
+		    tmp->datalen >= ieee80211_he_oper_size(&tmp->data[1])) {
+			const struct ieee80211_he_6ghz_oper *he_6ghz_oper;
+
+			he_oper = (void *)&tmp->data[1];
+
+			he_6ghz_oper = ieee80211_he_6ghz_oper(he_oper);
+			if (!he_6ghz_oper)
+				return -1;
+
+			return he_6ghz_oper->primary;
+		}
+	} else if (band == NL80211_BAND_S1GHZ) {
+		tmp = cfg80211_find_elem(WLAN_EID_S1G_OPERATION, ie, ielen);
+		if (tmp && tmp->datalen >= sizeof(struct ieee80211_s1g_oper_ie)) {
+			struct ieee80211_s1g_oper_ie *s1gop = (void *)tmp->data;
+
+			return s1gop->oper_ch;
+		}
+	} else {
+		tmp = cfg80211_find_elem(WLAN_EID_DS_PARAMS, ie, ielen);
+		if (tmp && tmp->datalen == 1)
+			return tmp->data[0];
+
+		tmp = cfg80211_find_elem(WLAN_EID_HT_OPERATION, ie, ielen);
+		if (tmp &&
+		    tmp->datalen >= sizeof(struct ieee80211_ht_operation)) {
+			struct ieee80211_ht_operation *htop = (void *)tmp->data;
+
+			return htop->primary_chan;
+		}
+	}
+
+	return -1;
+}
 
 struct rtw89_dev;
 struct rtw89_pci_info;
@@ -1069,6 +1188,11 @@ struct rtw89_rx_phy_ppdu {
 	u8 chan_idx;
 	u8 ie;
 	u16 rate;
+	u8 rpl_avg;
+	u8 rpl_path[RF_PATH_MAX];
+	u8 rpl_fd[RF_PATH_MAX];
+	u8 bw_idx;
+	u8 rx_path_en;
 	struct {
 		bool has;
 		u8 avg_snr;
@@ -1081,6 +1205,7 @@ struct rtw89_rx_phy_ppdu {
 	bool stbc;
 	bool to_self;
 	bool valid;
+	bool hdr_2_en;
 };
 
 enum rtw89_mac_idx {
@@ -3874,6 +3999,8 @@ struct rtw89_chip_ops {
 	void (*query_ppdu)(struct rtw89_dev *rtwdev,
 			   struct rtw89_rx_phy_ppdu *phy_ppdu,
 			   struct ieee80211_rx_status *status);
+	void (*convert_rpl_to_rssi)(struct rtw89_dev *rtwdev,
+				    struct rtw89_rx_phy_ppdu *phy_ppdu);
 	void (*ctrl_nbtg_bt_tx)(struct rtw89_dev *rtwdev, bool en,
 				enum rtw89_phy_idx phy_idx);
 	void (*cfg_txrx_path)(struct rtw89_dev *rtwdev);
@@ -4368,6 +4495,8 @@ struct rtw89_edcca_regs {
 	u32 edcca_level;
 	u32 edcca_mask;
 	u32 edcca_p_mask;
+	u32 edcca_dwn_level;
+	u32 edcca_dwn_mask;
 	u32 ppdu_level;
 	u32 ppdu_mask;
 	u32 rpt_a;
@@ -4378,6 +4507,13 @@ struct rtw89_edcca_regs {
 	u32 rpt_sel_be_mask;
 	u32 tx_collision_t2r_st;
 	u32 tx_collision_t2r_st_mask;
+};
+
+struct rtw89_edcca_thresholds {
+	u8 edcca_th_2g;
+	u8 edcca_th_5g;
+	u8 edcca_cbp_th_6g;
+	u8 edcca_cs_th;
 };
 
 struct rtw89_phy_ul_tb_info {
@@ -4449,7 +4585,9 @@ struct rtw89_chip_info {
 	bool support_unii4;
 	bool ul_tb_waveform_ctrl;
 	bool ul_tb_pwr_diff;
+	bool rx_freq_frome_ie;
 	bool hw_sec_hdr;
+	bool hw_mgmt_tx_encrypt;
 	u8 rf_path_num;
 	u8 tx_nss;
 	u8 rx_nss;
@@ -4537,6 +4675,7 @@ struct rtw89_chip_info {
 	struct rtw89_reg_def rfkill_get;
 	u32 dma_ch_mask;
 	const struct rtw89_edcca_regs *edcca_regs;
+	const struct rtw89_edcca_thresholds *edcca_th;
 	const struct wiphy_wowlan_support *wowlan_stub;
 	const struct rtw89_xtal_info *xtal_info;
 };
@@ -4582,17 +4721,23 @@ struct rtw89_completion_data {
 	u8 buf[RTW89_COMPLETION_BUF_SIZE];
 };
 
-struct rtw89_wait_info {
-	atomic_t cond;
+struct rtw89_wait_response {
+	struct rcu_head rcu_head;
 	struct completion completion;
 	struct rtw89_completion_data data;
+};
+
+struct rtw89_wait_info {
+	atomic_t cond;
+	struct rtw89_completion_data data;
+	struct rtw89_wait_response __rcu *resp;
 };
 
 #define RTW89_WAIT_FOR_COND_TIMEOUT msecs_to_jiffies(100)
 
 static inline void rtw89_init_wait(struct rtw89_wait_info *wait)
 {
-	init_completion(&wait->completion);
+	rcu_assign_pointer(wait->resp, NULL);
 	atomic_set(&wait->cond, RTW89_WAIT_COND_IDLE);
 }
 
@@ -4636,6 +4781,7 @@ enum rtw89_fw_feature {
 	RTW89_FW_FEATURE_MACID_PAUSE_SLEEP,
 	RTW89_FW_FEATURE_WOW_REASON_V1,
 	RTW89_FW_FEATURE_NO_WOW_CPU_IO_RX,
+	RTW89_FW_FEATURE_BEACON_LOSS_COUNT_V1,
 };
 
 struct rtw89_fw_suit {
@@ -4825,6 +4971,15 @@ enum rtw89_dm_type {
 	RTW89_DM_DYNAMIC_EDCCA,
 };
 
+enum rtw89_edcca_mode {
+	RTW89_EDCCA_NORMAL,
+	RTW89_EDCCA_ADAPT, /* ETSI */
+	RTW89_EDCCA_CS,    /* JP   */
+	RTW89_EDCCA_CBP,   /* FCC  */
+	RTW89_EDCCA_UK,
+	RTW89_EDCCA_SRRC,
+};
+
 struct rtw89_hal {
 	u32 rx_fltr;
 	u8 cv;
@@ -4849,7 +5004,10 @@ struct rtw89_hal {
 	bool entity_pause;
 	enum rtw89_entity_mode entity_mode;
 
+	enum rtw89_edcca_mode edcca_mode;
 	struct rtw89_edcca_bak edcca_bak;
+	bool edcca_test;
+	int edcca_offset;
 	u32 disabled_dm_bitmap; /* bitmap of enum rtw89_dm_type */
 };
 
@@ -6359,6 +6517,9 @@ static inline void rtw89_chip_rfk_init(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
 
+	if (rtwdev->hal.edcca_test)
+		return;
+
 	if (chip->ops->rfk_init)
 		chip->ops->rfk_init(rtwdev);
 }
@@ -6366,6 +6527,9 @@ static inline void rtw89_chip_rfk_init(struct rtw89_dev *rtwdev)
 static inline void rtw89_chip_rfk_channel(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
+
+	if (rtwdev->hal.edcca_test)
+		return;
 
 	if (chip->ops->rfk_channel)
 		chip->ops->rfk_channel(rtwdev);
@@ -6440,6 +6604,15 @@ static inline void rtw89_chip_query_ppdu(struct rtw89_dev *rtwdev,
 
 	if (chip->ops->query_ppdu)
 		chip->ops->query_ppdu(rtwdev, phy_ppdu, status);
+}
+
+static inline void rtw89_chip_convert_rpl_to_rssi(struct rtw89_dev *rtwdev,
+						  struct rtw89_rx_phy_ppdu *phy_ppdu)
+{
+	const struct rtw89_chip_info *chip = rtwdev->chip;
+
+	if (chip->ops->convert_rpl_to_rssi)
+		chip->ops->convert_rpl_to_rssi(rtwdev, phy_ppdu);
 }
 
 static inline void rtw89_ctrl_nbtg_bt_tx(struct rtw89_dev *rtwdev, bool en,
@@ -6762,7 +6935,12 @@ int rtw89_regd_init(struct rtw89_dev *rtwdev,
 void rtw89_regd_notifier(struct wiphy *wiphy, struct regulatory_request *request);
 void rtw89_traffic_stats_init(struct rtw89_dev *rtwdev,
 			      struct rtw89_traffic_stats *stats);
-int rtw89_wait_for_cond(struct rtw89_wait_info *wait, unsigned int cond);
+struct rtw89_wait_response *
+rtw89_wait_for_cond_prep(struct rtw89_wait_info *wait, unsigned int cond)
+__acquires(rtw89_wait);
+int rtw89_wait_for_cond_eval(struct rtw89_wait_info *wait,
+			     struct rtw89_wait_response *prep, int err)
+__releases(rtw89_wait);
 void rtw89_complete_cond(struct rtw89_wait_info *wait, unsigned int cond,
 			 const struct rtw89_completion_data *data);
 int rtw89_core_start(struct rtw89_dev *rtwdev);

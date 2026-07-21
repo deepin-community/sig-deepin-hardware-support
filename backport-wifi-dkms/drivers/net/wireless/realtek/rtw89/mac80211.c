@@ -126,7 +126,9 @@ static int rtw89_ops_add_interface(struct ieee80211_hw *hw,
 	rtwvif->rtwdev = rtwdev;
 	rtwvif->roc.state = RTW89_ROC_IDLE;
 	rtwvif->offchan = false;
-	list_add_tail(&rtwvif->list, &rtwdev->rtwvifs_list);
+	if (!rtw89_rtwvif_in_list(rtwdev, rtwvif))
+		list_add_tail(&rtwvif->list, &rtwdev->rtwvifs_list);
+
 	INIT_WORK(&rtwvif->update_beacon_work, rtw89_core_update_beacon_work);
 	INIT_DELAYED_WORK(&rtwvif->roc.roc_work, rtw89_roc_work);
 	rtw89_leave_ps_mode(rtwdev);
@@ -761,7 +763,7 @@ static void rtw89_ra_mask_info_update_iter(void *data, struct ieee80211_sta *sta
 
 	rtwsta->use_cfg_mask = true;
 	rtwsta->mask = *br_data->mask;
-	rtw89_phy_ra_updata_sta(br_data->rtwdev, sta, IEEE80211_RC_SUPP_RATES_CHANGED);
+	rtw89_phy_ra_update_sta(br_data->rtwdev, sta, IEEE80211_RC_SUPP_RATES_CHANGED);
 }
 
 static void rtw89_ra_mask_info_update(struct rtw89_dev *rtwdev,
@@ -866,6 +868,9 @@ static int rtw89_ops_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (!RTW89_CHK_FW_FEATURE(SCAN_OFFLOAD, &rtwdev->fw))
 		return 1;
 
+	if (rtwdev->hal.edcca_test)
+		return -EBUSY;
+
 	if (rtwdev->scanning || rtwvif->offchan)
 		return -EBUSY;
 
@@ -892,6 +897,9 @@ static void rtw89_ops_cancel_hw_scan(struct ieee80211_hw *hw,
 	if (!rtwdev->scanning)
 		return;
 
+	if (rtwdev->hal.edcca_test)
+		return;
+
 	mutex_lock(&rtwdev->mutex);
 	rtw89_hw_scan_abort(rtwdev, vif);
 	mutex_unlock(&rtwdev->mutex);
@@ -903,7 +911,7 @@ static void rtw89_ops_sta_rc_update(struct ieee80211_hw *hw,
 {
 	struct rtw89_dev *rtwdev = hw->priv;
 
-	rtw89_phy_ra_updata_sta(rtwdev, sta, changed);
+	rtw89_phy_ra_update_sta(rtwdev, sta, changed);
 }
 
 static int rtw89_ops_add_chanctx(struct ieee80211_hw *hw,

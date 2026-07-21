@@ -1490,6 +1490,21 @@ static int rtw89_mac_power_switch(struct rtw89_dev *rtwdev, bool on)
 #undef PWR_ACT
 }
 
+int rtw89_mac_pwr_on(struct rtw89_dev *rtwdev)
+{
+	int ret;
+
+	ret = rtw89_mac_power_switch(rtwdev, true);
+	if (ret) {
+		rtw89_mac_power_switch(rtwdev, false);
+		ret = rtw89_mac_power_switch(rtwdev, true);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 void rtw89_mac_pwr_off(struct rtw89_dev *rtwdev)
 {
 	rtw89_mac_power_switch(rtwdev, false);
@@ -2032,10 +2047,15 @@ int rtw89_mac_resize_ple_rx_quota(struct rtw89_dev *rtwdev, bool wow)
 
 void rtw89_mac_hw_mgnt_sec(struct rtw89_dev *rtwdev, bool enable)
 {
+	const struct rtw89_chip_info *chip = rtwdev->chip;
 	u32 msk32 = B_AX_UC_MGNT_DEC | B_AX_BMC_MGNT_DEC;
 
 	if (rtwdev->chip->chip_gen != RTW89_CHIP_AX)
 		return;
+
+	/* 8852C enable B_AX_UC_MGNT_DEC by default */
+	if (chip->chip_id == RTL8852C)
+		msk32 = B_AX_BMC_MGNT_DEC;
 
 	if (enable)
 		rtw89_write32_set(rtwdev, R_AX_SEC_ENG_CTRL, msk32);
@@ -2261,6 +2281,8 @@ static int sec_eng_init_ax(struct rtw89_dev *rtwdev)
 	/* init TX encryption */
 	val |= (B_AX_SEC_TX_ENC | B_AX_SEC_RX_DEC);
 	val |= (B_AX_MC_DEC | B_AX_BC_DEC);
+	if (chip->chip_id == RTL8852C)
+		val |= B_AX_UC_MGNT_DEC;
 	if (chip->chip_id == RTL8852A || chip->chip_id == RTL8852B ||
 	    chip->chip_id == RTL8851B)
 		val &= ~B_AX_TX_PARTIAL_MODE;
@@ -2463,8 +2485,9 @@ static int rx_fltr_init_ax(struct rtw89_dev *rtwdev, u8 mac_idx)
 
 static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 {
-	u32 reg, val32;
+	const struct rtw89_chip_info *chip = rtwdev->chip;
 	u32 b_rsp_chk_nav, b_rsp_chk_cca;
+	u32 reg, val32;
 
 	b_rsp_chk_nav = B_AX_RSP_CHK_TXNAV | B_AX_RSP_CHK_INTRA_NAV |
 			B_AX_RSP_CHK_BASIC_NAV;
@@ -2472,9 +2495,8 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 			B_AX_RSP_CHK_SEC_CCA_20 | B_AX_RSP_CHK_BTCCA |
 			B_AX_RSP_CHK_EDCCA | B_AX_RSP_CHK_CCA;
 
-	switch (rtwdev->chip->chip_id) {
-	case RTL8852A:
-	case RTL8852B:
+	if (chip->chip_id == RTL8852A ||
+	    (chip->chip_id == RTL8852B && rtwdev->hal.cv == CHIP_CAV)) {
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_RSP_CHK_SIG, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) & ~b_rsp_chk_nav;
 		rtw89_write32(rtwdev, reg, val32);
@@ -2482,8 +2504,7 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_TRXPTCL_RESP_0, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) & ~b_rsp_chk_cca;
 		rtw89_write32(rtwdev, reg, val32);
-		break;
-	default:
+	} else {
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_RSP_CHK_SIG, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) | b_rsp_chk_nav;
 		rtw89_write32(rtwdev, reg, val32);
@@ -2491,7 +2512,6 @@ static void _patch_dis_resp_chk(struct rtw89_dev *rtwdev, u8 mac_idx)
 		reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_TRXPTCL_RESP_0, mac_idx);
 		val32 = rtw89_read32(rtwdev, reg) | b_rsp_chk_cca;
 		rtw89_write32(rtwdev, reg, val32);
-		break;
 	}
 }
 
@@ -3899,14 +3919,6 @@ int rtw89_mac_partial_init(struct rtw89_dev *rtwdev, bool include_bb)
 {
 	int ret;
 
-	ret = rtw89_mac_power_switch(rtwdev, true);
-	if (ret) {
-		rtw89_mac_power_switch(rtwdev, false);
-		ret = rtw89_mac_power_switch(rtwdev, true);
-		if (ret)
-			return ret;
-	}
-
 	rtw89_mac_ctrl_hci_dma_trx(rtwdev, true);
 
 	if (include_bb) {
@@ -3939,6 +3951,10 @@ int rtw89_mac_init(struct rtw89_dev *rtwdev)
 	bool include_bb = !!chip->bbmcu_nr;
 	int ret;
 
+	ret = rtw89_mac_pwr_on(rtwdev);
+	if (ret)
+		return ret;
+
 	ret = rtw89_mac_partial_init(rtwdev, include_bb);
 	if (ret)
 		goto fail;
@@ -3970,7 +3986,7 @@ int rtw89_mac_init(struct rtw89_dev *rtwdev)
 
 	return ret;
 fail:
-	rtw89_mac_power_switch(rtwdev, false);
+	rtw89_mac_pwr_off(rtwdev);
 
 	return ret;
 }
@@ -4631,6 +4647,7 @@ void rtw89_mac_set_he_obss_narrow_bw_ru(struct rtw89_dev *rtwdev,
 					struct ieee80211_vif *vif)
 {
 	struct rtw89_vif *rtwvif = (struct rtw89_vif *)vif->drv_priv;
+	const struct rtw89_mac_gen_def *mac = rtwdev->chip->mac_def;
 	struct ieee80211_hw *hw = rtwdev->hw;
 	bool tolerated = true;
 	u32 reg;
@@ -4645,11 +4662,12 @@ void rtw89_mac_set_he_obss_narrow_bw_ru(struct rtw89_dev *rtwdev,
 			  rtw89_mac_check_he_obss_narrow_bw_ru_iter,
 			  &tolerated);
 
-	reg = rtw89_mac_reg_by_idx(rtwdev, R_AX_RXTRIG_TEST_USER_2, rtwvif->mac_idx);
+	reg = rtw89_mac_reg_by_idx(rtwdev, mac->narrow_bw_ru_dis.addr,
+				   rtwvif->mac_idx);
 	if (tolerated)
-		rtw89_write32_clr(rtwdev, reg, B_AX_RXTRIG_RU26_DIS);
+		rtw89_write32_clr(rtwdev, reg, mac->narrow_bw_ru_dis.mask);
 	else
-		rtw89_write32_set(rtwdev, reg, B_AX_RXTRIG_RU26_DIS);
+		rtw89_write32_set(rtwdev, reg, mac->narrow_bw_ru_dis.mask);
 }
 
 void rtw89_mac_stop_ap(struct rtw89_dev *rtwdev, struct rtw89_vif *rtwvif)
@@ -4794,10 +4812,9 @@ rtw89_mac_bcn_fltr_rpt(struct rtw89_dev *rtwdev, struct rtw89_vif *rtwvif,
 
 	switch (type) {
 	case RTW89_BCN_FLTR_BEACON_LOSS:
-		if (!rtwdev->scanning && !rtwvif->offchan)
-			ieee80211_connection_loss(vif);
-		else
-			rtw89_fw_h2c_set_bcn_fltr_cfg(rtwdev, vif, true);
+		if (!rtwdev->scanning && !rtwvif->offchan && !rtwdev->hal.edcca_test)
+			ieee80211_beacon_loss(vif);
+		rtw89_fw_h2c_set_bcn_fltr_cfg(rtwdev, vif, true);
 		return;
 	case RTW89_BCN_FLTR_NOTIFY:
 		nl_event = NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH;
@@ -6310,6 +6327,11 @@ const struct rtw89_mac_gen_def rtw89_mac_gen_ax = {
 		.addr = R_AX_BFMEE_RESP_OPTION,
 		.mask = B_AX_BFMEE_HT_NDPA_EN | B_AX_BFMEE_VHT_NDPA_EN |
 			B_AX_BFMEE_HE_NDPA_EN,
+	},
+
+	.narrow_bw_ru_dis = {
+		.addr = R_AX_RXTRIG_TEST_USER_2,
+		.mask = B_AX_RXTRIG_RU26_DIS,
 	},
 
 	.wow_ctrl = {.addr = R_AX_WOW_CTRL, .mask = B_AX_WOW_WOWEN,},

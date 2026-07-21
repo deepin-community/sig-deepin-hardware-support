@@ -12,6 +12,7 @@
 #include "ps.h"
 #include "reg.h"
 #include "sar.h"
+#include "phy.h"
 
 #ifdef CPTCFG_RTW89_DEBUGMSG
 unsigned int rtw89_debug_mask;
@@ -3856,6 +3857,55 @@ static ssize_t rtw89_debug_wifi_test_config_set(struct file *filp,
 	return count;
 }
 
+static int
+rtw89_debug_priv_edcca_test_get(struct seq_file *m, void *v)
+{
+	struct rtw89_debugfs_priv *debugfs_priv = m->private;
+	struct rtw89_dev *rtwdev = debugfs_priv->rtwdev;
+	struct rtw89_hal *hal = &rtwdev->hal;
+
+	seq_printf(m, "EDCCA mode(%s): %d, offset: %d\n", hal->edcca_test ? "enabled" : "disabled",
+		   hal->edcca_mode, hal->edcca_offset);
+
+	return 0;
+}
+
+static ssize_t rtw89_debug_priv_edcca_test_set(struct file *filp, const char __user *user_buf,
+					       size_t count, loff_t *loff)
+{
+	struct seq_file *m = (struct seq_file *)filp->private_data;
+	struct rtw89_debugfs_priv *debugfs_priv = m->private;
+	struct rtw89_dev *rtwdev = debugfs_priv->rtwdev;
+	struct rtw89_hal *hal = &rtwdev->hal;
+	int mode, num, enable;
+	size_t buf_size;
+	char buf[32];
+
+	buf_size = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, buf_size))
+		return -EFAULT;
+
+	buf[buf_size] = '\0';
+
+	if (strncmp("edcca_test", buf, 10) == 0) {
+		num = sscanf(buf, "%*s %d %d", &mode, &enable);
+		if (num != 2)
+			return -EINVAL;
+		hal->edcca_test = enable;
+		if (enable)
+			hal->edcca_mode = mode;
+
+		rtw89_phy_recalc_edcca_mode(rtwdev);
+	} else if (strncmp("edcca_offset", buf, 10) == 0) {
+		num = sscanf(buf, "%*s %d", &mode);
+		if (num != 1)
+			return -EINVAL;
+		hal->edcca_offset = mode;
+	}
+
+	return count;
+}
+
 static struct rtw89_debugfs_priv rtw89_debug_priv_read_reg = {
 	.cb_read = rtw89_debug_priv_read_reg_get,
 	.cb_write = rtw89_debug_priv_read_reg_select,
@@ -3940,6 +3990,11 @@ static struct rtw89_debugfs_priv rtw89_debug_priv_wifi_test_config = {
 	.cb_write = rtw89_debug_wifi_test_config_set,
 };
 
+static struct rtw89_debugfs_priv rtw89_debug_priv_edcca_test = {
+	.cb_read = rtw89_debug_priv_edcca_test_get,
+	.cb_write = rtw89_debug_priv_edcca_test_set,
+};
+
 #define rtw89_debugfs_add(name, mode, fopname, parent)				\
 	do {									\
 		rtw89_debug_priv_ ##name.rtwdev = rtwdev;			\
@@ -3982,6 +4037,7 @@ void rtw89_debugfs_init(struct rtw89_dev *rtwdev)
 	rtw89_debugfs_add_r(stations);
 	rtw89_debugfs_add_rw(disable_dm);
 	rtw89_debugfs_add_w(wifi_test_config);
+	rtw89_debugfs_add_rw(edcca_test);
 }
 #endif
 
